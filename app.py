@@ -293,7 +293,16 @@ def get_stock_data(ticker):
             k_percent = round(k * 100, 2)
             
             # 2. Parameters
-            g_high = 0.03      # 3% Growth
+            # Use Earnings Growth for Stage 1 (Capped at 15% to be conservative)
+            eg_rate = get_float("earningsGrowth")
+            if eg_rate == "-": eg_rate = 0.03 # Default 3% if missing
+            
+            # g_high = min(eg_rate, 0.15) but also max(eg_rate, 0.03) to give at least some growth?
+            # Let's stick to: if growth is high, use it (capped). If low/negative, use 0 or low.
+            g_high = 0.03
+            if eg_rate > 0:
+                g_high = min(eg_rate, 0.15)
+            
             g_perpetual = 0.03 # 3% Terminal Growth
             
             # D0 = Current Dividend (final_div_rate)
@@ -340,6 +349,47 @@ def get_stock_data(ticker):
             print(f"DDM Error {ticker}: {e}")
             ddm_value = "-"
 
+        # --- Graham Number Calculation ---
+        # Formula: Sqrt(22.5 * EPS * BVPS)
+        graham_number = "-"
+        try:
+            eps_ttm = get_float("trailingEps")
+            bvps = get_float("bookValue")
+            if eps_ttm != "-" and bvps != "-" and eps_ttm > 0 and bvps > 0:
+                graham_val = (22.5 * eps_ttm * bvps) ** 0.5
+                graham_number = round(graham_val, 2)
+        except Exception as e:
+            pass
+            
+        # --- Peter Lynch Fair Value (PEG Based) ---
+        # Fair P/E = Growth Rate (approx). So Fair Price = EPS * (Growth Rate * 100)
+        # We assume fair PEG = 1.0. 
+        # Using 5-year expected growth or trailing growth. Let's use 'earningsGrowth' (quarterly) or 'revenueGrowth'
+        # Ideally: EPS * (Earnings Growth Rate * 100)
+        lynch_value = "-"
+        try:
+            eps_ttm = get_float("trailingEps")
+            growth_rate = get_float("earningsGrowth") # This is like 0.15 for 15%
+            if eps_ttm != "-" and growth_rate != "-" and eps_ttm > 0 and growth_rate > 0:
+                # Cap growth rate for safety (e.g. max 25%)
+                g_percent = growth_rate * 100
+                if g_percent > 25: g_percent = 25 
+                # Lynch Formula: Fair Value = EPS * Growth Rate
+                # Often adds Dividend Yield: Fair Value = EPS * (Growth + Yield)
+                
+                # Note: dividendYield in yfinance is usually percentage (e.g. 5.5 for 5.5%)
+                # But sometimes it might be decimal? Let's check magnitude.
+                # If > 1, assume percent. If < 1, might be decimal or just low yield.
+                # Safest is to treat it as percentage if it's consistent with recent observation (PRM=6.33, PTT=5.64)
+                # But AAPL=0.38 (0.38%).
+                # So it seems ALWAYS Percentage.
+                div_yield_percent = get_float("dividendYield", 1, 0) 
+                
+                lynch_val = eps_ttm * (g_percent + div_yield_percent)
+                lynch_value = round(lynch_val, 2)
+        except:
+            pass
+
         # --- RSI (14-Day) Calculation ---
         rsi = "-"
         try:
@@ -364,14 +414,32 @@ def get_stock_data(ticker):
         # --- Margin of Safety (MOS) ---
         mos = "-"
         price = get_float("currentPrice")
-        if ddm_value != "-" and price != "-" and price > 0 and ddm_value > 0:
-            mos = round(((ddm_value - price) / ddm_value) * 100, 2)
+        # Use average valuation if available, else fallback to DDM
+        fair_value = ddm_value
+        
+        # Calculate Average Fair Value from valid models
+        valid_values = []
+        if ddm_value != "-" and ddm_value > 0: valid_values.append(ddm_value)
+        if graham_number != "-" and graham_number > 0: valid_values.append(graham_number)
+        if lynch_value != "-" and lynch_value > 0: valid_values.append(lynch_value)
+        
+        # Add Analyst Target if available
+        target_price = get_float("targetMeanPrice")
+        if target_price != "-" and target_price > 0: valid_values.append(target_price)
+        
+        if valid_values:
+            fair_value = sum(valid_values) / len(valid_values)
+            
+        if fair_value != "-" and price != "-" and price > 0 and fair_value > 0:
+            mos = round(((fair_value - price) / fair_value) * 100, 2)
 
         # --- Quality Score Calculation (Magic Score) ---
         score = 0
         score_details = []
         
         # 1. Valuation: P/E < 20 (Conservative)
+        # Check against Sector P/E if available or use standard 20
+        # For now standard 20 is safe
         pe = get_float("trailingPE")
         if pe != "-" and pe < 20 and pe > 0: 
             score += 1
@@ -380,38 +448,48 @@ def get_stock_data(ticker):
         # 2. Valuation: PEG < 1.5 (Growth at reasonable price)
         # PEG = P/E / Growth Rate (Earnings Growth)
         # If Earnings Growth is 0.20 (20%), and P/E is 20, PEG = 1.0
+        # Correct Formula: PEG = P/E / (Growth Rate * 100)
         eg = get_float("earningsGrowth")
         peg = "-"
         if pe != "-" and eg != "-" and eg > 0:
-            peg = pe / (eg * 100) # eg is decimal (0.2), we need 20.
+            peg = pe / (eg * 100) 
             if peg < 1.5:
                 score += 1
                 score_details.append(f"PEG < 1.5 ({peg:.2f})")
         
-        # 3. Valuation: Price < DDM (Margin of Safety)
-        if ddm_value != "-" and price != "-" and price < ddm_value: 
+        # 3. Valuation: Price < Fair Value (Margin of Safety > 0)
+        # Changed from Price < DDM to Price < Average Fair Value
+        if mos != "-" and mos > 0: 
             score += 1
-            score_details.append(f"Price < DDM (k={k_percent}%)")
+            score_details.append(f"Price < Fair Value (MOS {mos}%)")
         
         # 4. Efficiency: ROE > 12%
+        # Check ROE unit. yfinance usually returns 0.15 for 15%
         roe = get_float("returnOnEquity")
         if roe != "-" and roe > 0.12: 
             score += 1
             score_details.append("ROE > 12%")
         
         # 5. Financial Health: D/E < 1.5
+        # Calculated from BS earlier
         de = debt_to_equity
         if de != "-" and de < 1.5: 
             score += 1
             score_details.append("D/E < 1.5")
         
         # 6. Dividend: Yield > 3%
+        # yfinance returns yield as decimal (0.05) or percentage (5.0)?
+        # Based on previous check, dividendYield is PERCENTAGE (e.g. 5.64)
+        # BUT wait, get_float("dividendYield", 1) means we take raw value.
+        # AAPL was 0.38 (0.38%), PTT was 5.64 (5.64%)
+        # So threshold should be > 3 (if percentage)
         dy = get_float("dividendYield", 1) 
         if dy != "-" and dy > 3: 
             score += 1
             score_details.append("Yield > 3%")
         
         # 7. Growth: Earnings Growth > 5%
+        # eg is decimal (0.20 for 20%)
         if eg != "-" and eg > 0.05: 
             score += 1
             score_details.append("Earn Growth > 5%")
@@ -421,10 +499,11 @@ def get_stock_data(ticker):
             score += 1
             score_details.append(f"RSI < 50 ({rsi})")
 
-        # 9. Risk: MOS > 10% (Significant Safety Margin)
-        if mos != "-" and mos > 10:
+        # 9. Risk: MOS > 20% (Significant Safety Margin)
+        # Increased from 10% to 20% for stricter safety
+        if mos != "-" and mos > 20:
             score += 1
-            score_details.append(f"MOS > 10% ({mos}%)")
+            score_details.append(f"MOS > 20% ({mos}%)")
 
         # 10. Bonus: Grade A if Score >= 7
         # Current Max Score is 9
@@ -435,6 +514,7 @@ def get_stock_data(ticker):
         
         # Let's add one more criteria to make it 10 points max
         # 10. Efficiency: Net Margin > 10%
+        # profitMargins is decimal (0.10)
         nm = get_float("profitMargins")
         if nm != "-" and nm > 0.10:
             score += 1
@@ -445,6 +525,13 @@ def get_stock_data(ticker):
         if score >= 7: grade = "A"
         elif score >= 5: grade = "B"
         elif score >= 3: grade = "C"
+        
+        # --- Value Trap Detection ---
+        # Definition: Low P/E but Negative Growth or Declining Revenue
+        is_value_trap = False
+        if pe != "-" and pe < 10 and pe > 0:
+            if (eg != "-" and eg < 0) or (get_float("revenueGrowth") != "-" and get_float("revenueGrowth") < 0):
+                is_value_trap = True
 
         return {
             "symbol": ticker,
@@ -457,6 +544,8 @@ def get_stock_data(ticker):
             "dividend_rate": final_div_rate,
             "ddm_value": ddm_value,
             "ddm_k": k_percent,
+            "graham_number": graham_number,
+            "lynch_value": lynch_value,
             "peg": round(peg, 2) if peg != "-" else "-",
             "target_price": get_val("targetMeanPrice", "-"),
             "rsi": rsi,
@@ -472,6 +561,7 @@ def get_stock_data(ticker):
             "score": score,
             "grade": grade,
             "score_details": score_details,
+            "is_value_trap": is_value_trap,
             "details": {
                 "roa": get_val("returnOnAssets", "-"),
                 "roe": get_val("returnOnEquity", "-"),

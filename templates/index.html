@@ -201,6 +201,12 @@
                     </div>
                     
                     <div class="row mb-4">
+                        <div class="col-12" id="valuation-matrix-container">
+                             <!-- Valuation Matrix will be inserted here -->
+                        </div>
+                    </div>
+                    
+                    <div class="row mb-4">
                         <div class="col-md-6">
                             <h5 class="border-bottom pb-2 mb-3">แนวโน้มกำไรต่อหุ้น (EPS) 5 ปี</h5>
                             <canvas id="epsChart"></canvas>
@@ -337,7 +343,35 @@
                 if (!stocksData || stocksData.length === 0) return;
 
                 // Sort logic: Score (desc) -> MOS (desc) -> Price (asc)
-                let sorted = [...stocksData].sort((a, b) => {
+                // Filter out bad stocks first (Quality Filter)
+                let candidates = stocksData.filter(stock => {
+                    // Exclude if Earnings Growth is negative (Declining business)
+                    // stock.ebitda_growth is derived from 'earningsGrowth' in backend
+                    let eg = parseFloat(stock.ebitda_growth);
+                    if (!isNaN(eg) && eg < 0) return false;
+                    
+                    // Exclude if Net Margin is negative (Losing money)
+                    let nm = parseFloat(stock.details.profit_margin);
+                    if (!isNaN(nm) && nm < 0) return false;
+                    
+                    // Exclude if Dividend Yield is missing or 0 (User prefers dividend stocks usually)
+                    // Optional: let's be strict for Top 5
+                    let dy = parseFloat(stock.dividend_yield);
+                    if (isNaN(dy) || dy <= 0) return false;
+                    
+                    // Exclude small caps? (e.g. Market Cap < 1B)
+                    // market_cap is in raw units
+                    let mc = parseFloat(stock.market_cap);
+                    if (!isNaN(mc) && mc < 1000000000) return false;
+                    
+                    return true;
+                });
+                
+                // If candidates are too few, fallback to original list but warn?
+                // Or just use original sorted list if empty
+                let sourceList = candidates.length >= 5 ? candidates : stocksData;
+
+                let sorted = [...sourceList].sort((a, b) => {
                     let scoreA = a.score || 0;
                     let scoreB = b.score || 0;
                     if (scoreB !== scoreA) return scoreB - scoreA;
@@ -518,6 +552,8 @@
                     { label: "Target Price", value: stock.target_price },
                     { label: "PEG Ratio", value: stock.peg },
                     { label: "DDM Value", value: stock.ddm_value },
+                    { label: "Graham Number", value: stock.graham_number },
+                    { label: "Lynch Fair Value", value: stock.lynch_value },
                     { label: "DDM Discount Rate (k)", value: stock.ddm_k ? stock.ddm_k + "%" : "-" },
                     { label: "Market Cap (B)", value: (stock.market_cap / 1000000000).toFixed(2) },
                     { label: "Net Margin", value: stock.details.profit_margin },
@@ -539,20 +575,51 @@
                     
                     // Special handling for pre-formatted or raw values
                     if (r.label === "Market Cap (B)") {
-                         // Already formatted above
+                         // Already formatted above (divided by 1B)
                          val = formatNumber(val);
                     } else if (r.label === "Revenue Growth" || r.label === "Earnings Growth") {
-                         val = formatNumber(r.value);
-                         if (val !== "-") val += "%";
+                         // Growth rates are decimals (0.20 for 20%), so multiply by 100
+                         let raw = parseFloat(r.value);
+                         if (!isNaN(raw)) {
+                             val = formatNumber(raw * 100) + "%";
+                         } else {
+                             val = "-";
+                         }
+                    } else if (r.label === "Dividend Yield") {
+                         // Dividend Yield is percentage (5.64), format as number + %
+                         let raw = parseFloat(r.value);
+                         if (!isNaN(raw)) {
+                             val = formatNumber(raw) + "%";
+                         } else {
+                             val = "-";
+                         }
                     } else {
                          val = formatNumber(r.value);
                     }
 
-                    if (r.label.includes("Margin") || r.label.includes("ROE") || r.label.includes("ROA")) {
-                         // Convert decimal to % if needed
-                         if (r.value && Math.abs(r.value) < 1) val = (r.value * 100).toFixed(2) + "%";
+                    if (r.label.includes("Margin") || r.label.includes("ROE") || r.label.includes("ROA") || r.label.includes("DDM Discount Rate")) {
+                         // These are usually decimals (0.15), convert to %
+                         // BUT wait, check if already formatted?
+                         // ROE from yfinance is 0.15. Margin is 0.10.
+                         // DDM Discount Rate is manually set as number (10.0) -> so no need to multiply?
+                         // Let's handle carefully.
+                         
+                         let raw = parseFloat(r.value);
+                         if (!isNaN(raw)) {
+                             if (r.label.includes("DDM Discount Rate")) {
+                                 // Already percentage (10.0)
+                                 val = formatNumber(raw) + "%";
+                             } else if (Math.abs(raw) <= 1.0) {
+                                 // Likely decimal, convert to %
+                                 val = formatNumber(raw * 100) + "%";
+                             } else {
+                                 // Likely already %, just add symbol
+                                 val = formatNumber(raw) + "%";
+                             }
+                         }
                     }
-                    if (r.label === "Dividend Yield" && val !== "-") val += "%";
+                    // Dividend Yield handled above
+                    // if (r.label === "Dividend Yield" && val !== "-") val += "%";
 
                     ratioHtml += `
                         <div class="col-6 col-md-3">
@@ -563,6 +630,116 @@
                         </div>`;
                 });
                 $('#financial-ratios').html(ratioHtml);
+
+                // --- Render Valuation Matrix ---
+                let currentPrice = parseFloat(stock.price);
+                let valuationHtml = "";
+                
+                if (!isNaN(currentPrice)) {
+                    let valuations = [
+                        { name: "DDM (ปันผล)", value: parseFloat(stock.ddm_value) },
+                        { name: "Graham Number", value: parseFloat(stock.graham_number) },
+                        { name: "Lynch Value", value: parseFloat(stock.lynch_value) },
+                        { name: "Analyst Target", value: parseFloat(stock.target_price) }
+                    ];
+
+                    // Filter valid valuations
+                    let validValuations = valuations.filter(v => !isNaN(v.value) && v.value > 0);
+                    
+                    if (validValuations.length > 0) {
+                        let avgValuation = validValuations.reduce((sum, v) => sum + v.value, 0) / validValuations.length;
+                        let upside = ((avgValuation - currentPrice) / currentPrice) * 100;
+                        let upsideClass = upside > 0 ? "text-success" : "text-danger";
+                        let upsideSign = upside > 0 ? "+" : "";
+
+                        // Value Trap Warning
+                        if (stock.is_value_trap) {
+                            valuationHtml = `
+                            <div class="alert alert-warning d-flex align-items-center mb-3" role="alert">
+                                <i class="bi bi-exclamation-triangle-fill flex-shrink-0 me-2"></i>
+                                <div>
+                                    <strong>ระวังกับดักหุ้นถูก (Value Trap)!</strong> หุ้นตัวนี้มี P/E ต่ำกว่า 10 แต่มีการเติบโตที่ติดลบ โปรดตรวจสอบพื้นฐานอย่างละเอียด
+                                </div>
+                            </div>` + valuationHtml;
+                        }
+
+                        valuationHtml = `
+                        <div class="col-12 mt-3">
+                            <div class="card border-0 shadow-sm bg-white">
+                                <div class="card-header bg-primary text-white">
+                                    <h6 class="mb-0"><i class="bi bi-calculator"></i> Valuation Matrix (ประเมินมูลค่าที่แท้จริง)</h6>
+                                </div>
+                                <div class="card-body">
+                                    <div class="row text-center mb-3">
+                                        <div class="col-6 col-md-3 border-end">
+                                            <small class="text-muted">ราคาปัจจุบัน</small>
+                                            <h4 class="fw-bold text-dark">${formatNumber(currentPrice)}</h4>
+                                        </div>
+                                        <div class="col-6 col-md-3 border-end">
+                                            <small class="text-muted">มูลค่าเฉลี่ย (Fair Value)</small>
+                                            <h4 class="fw-bold text-primary">${formatNumber(avgValuation)}</h4>
+                                        </div>
+                                        <div class="col-12 col-md-6 mt-2 mt-md-0">
+                                            <small class="text-muted">Upside / Downside</small>
+                                            <h4 class="fw-bold ${upsideClass}">${upsideSign}${formatNumber(upside)}%</h4>
+                                        </div>
+                                    </div>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-bordered mb-0">
+                                            <thead class="table-light">
+                                                <tr>
+                                                    <th>Model</th>
+                                                    <th>Value (บาท)</th>
+                                                    <th>เทียบราคาตลาด</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>`;
+                        
+                        validValuations.forEach(v => {
+                            let diff = ((v.value - currentPrice) / currentPrice) * 100;
+                            let diffClass = diff > 0 ? "text-success" : "text-danger";
+                            let diffSign = diff > 0 ? "+" : "";
+                            
+                            valuationHtml += `
+                                <tr>
+                                    <td>${v.name}</td>
+                                    <td class="fw-bold">${formatNumber(v.value)}</td>
+                                    <td class="${diffClass}">${diffSign}${formatNumber(diff)}%</td>
+                                </tr>`;
+                        });
+                        
+                        valuationHtml += `
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div class="mt-3">
+                                        <label class="small text-muted mb-1">ความถูก/แพง (Relative Valuation)</label>
+                                        <div class="progress" style="height: 20px;">
+                                            <div class="progress-bar bg-danger" role="progressbar" style="width: 33%" title="Overvalued">Overvalued</div>
+                                            <div class="progress-bar bg-warning" role="progressbar" style="width: 34%" title="Fair">Fair</div>
+                                            <div class="progress-bar bg-success" role="progressbar" style="width: 33%" title="Undervalued">Undervalued</div>
+                                        </div>
+                                        <div class="position-relative" style="height: 20px; margin-top: -20px;">
+                                            <div class="position-absolute" style="left: ${Math.min(Math.max((currentPrice / (avgValuation * 1.5)) * 100, 0), 100)}%; transform: translateX(-50%);">
+                                                <i class="bi bi-caret-down-fill text-dark" style="font-size: 1.5rem;"></i>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>`;
+                    }
+                }
+                
+                // Insert Valuation HTML before charts
+                if ($('#valuation-section').length === 0) {
+                     $('<div id="valuation-section" class="row"></div>').insertBefore('#epsChart').parent().parent().parent(); 
+                     // Wait, insert before the charts row. Charts are in <div class="row mt-4">...
+                     // Let's find a better anchor. Charts are rendered in static HTML in modal-body? No, modal-body contains static canvas.
+                     // We should append this to a specific container in modal.
+                }
+                $('#valuation-matrix-container').html(valuationHtml);
+
 
                 // Render Charts
                 let currentYear = new Date().getFullYear();
