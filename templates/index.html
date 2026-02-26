@@ -364,6 +364,26 @@
                     let mc = parseFloat(stock.market_cap);
                     if (!isNaN(mc) && mc < 1000000000) return false;
                     
+                    // --- Sustainability Filter (Consistency Check) ---
+                    // 1. Dividend Consistency: Must pay in at least 3 of last 5 years
+                    // div_trend is 10 years (2016-2025). Last 5 years are index 5,6,7,8,9
+                    if (stock.div_trend && stock.div_trend.length >= 10) {
+                        let recent5Y = stock.div_trend.slice(5); // Last 5 years
+                        let payingYears = recent5Y.filter(d => d > 0).length;
+                        if (payingYears < 3) return false;
+                    }
+                    
+                    // 2. EPS Consistency: Must not have negative EPS in last 2 years
+                    // eps_trend is 5 years. Last 2 years are index 3,4
+                    if (stock.eps_trend && stock.eps_trend.length >= 5) {
+                        let lastYearEPS = stock.eps_trend[4];
+                        let prevYearEPS = stock.eps_trend[3];
+                        // If any of the last 2 years is negative, exclude (Turnaround is risky)
+                        if ((lastYearEPS !== null && lastYearEPS < 0) || (prevYearEPS !== null && prevYearEPS < 0)) {
+                            return false;
+                        }
+                    }
+
                     return true;
                 });
                 
@@ -541,52 +561,43 @@
 
                 // Populate Financial Ratios (Dynamic List)
                 let ratios = [
-                    { label: "P/E (ปัจจุบัน)", value: stock.pe_trailing },
-                    { label: "P/E (คาดการณ์)", value: stock.pe_forward },
-                    { label: "P/BV", value: stock.details.price_to_book },
-                    { label: "ROE", value: stock.details.roe },
-                    { label: "ROA", value: stock.details.roa },
-                    { label: "D/E Ratio", value: stock.details.debt_to_equity },
-                    { label: "Dividend Yield", value: stock.dividend_yield },
-                    { label: "Dividend Rate", value: stock.dividend_rate },
-                    { label: "Target Price", value: stock.target_price },
-                    { label: "PEG Ratio", value: stock.peg },
-                    { label: "DDM Value", value: stock.ddm_value },
-                    { label: "Graham Number", value: stock.graham_number },
-                    { label: "Lynch Fair Value", value: stock.lynch_value },
-                    { label: "DDM Discount Rate (k)", value: stock.ddm_k ? stock.ddm_k + "%" : "-" },
-                    { label: "Market Cap (B)", value: (stock.market_cap / 1000000000).toFixed(2) },
-                    { label: "Net Margin", value: stock.details.profit_margin },
-                    { label: "Gross Margin", value: stock.details.gross_margin },
-                    { label: "Operating Margin", value: stock.details.operating_margin },
-                    { label: "Revenue Growth", value: stock.revenue_growth },
-                    { label: "Earnings Growth", value: stock.ebitda_growth },
-                    { label: "Current Ratio", value: stock.details.current_ratio },
-                    { label: "Quick Ratio", value: stock.details.quick_ratio },
-                    { label: "Book Value", value: stock.details.book_value },
-                    { label: "Beta", value: stock.beta },
-                    { label: "52W High", value: stock.high_52 },
-                    { label: "52W Low", value: stock.low_52 }
+                    { label: "P/E (ปัจจุบัน)", value: stock.pe_trailing, is_percent: false },
+                    { label: "P/E (คาดการณ์)", value: stock.pe_forward, is_percent: false },
+                    { label: "P/BV", value: stock.details.price_to_book, is_percent: false },
+                    { label: "ROE", value: stock.details.roe, is_percent: true },
+                    { label: "ROA", value: stock.details.roa, is_percent: true },
+                    { label: "D/E Ratio", value: stock.details.debt_to_equity, is_percent: false },
+                    { label: "อัตราปันผลตอบแทน", value: stock.dividend_yield, is_percent: true },
+                    { label: "เงินปันผล (บาท/หุ้น)", value: stock.dividend_rate, is_percent: false },
+                    { label: "ราคาเป้าหมาย", value: stock.target_price, is_percent: false },
+                    { label: "PEG Ratio", value: stock.peg, is_percent: false },
+                    { label: "มูลค่า DDM", value: stock.ddm_value, is_percent: false },
+                    { label: "มูลค่า Graham", value: stock.graham_number, is_percent: false },
+                    { label: "มูลค่า Lynch", value: stock.lynch_value, is_percent: false },
+                    { label: "อัตราคิดลด (k)", value: stock.ddm_k, is_percent: true },
+                    { label: "มูลค่าตลาด (พันล้าน)", value: (stock.market_cap / 1000000000).toFixed(2), is_percent: false, is_mcap: true },
+                    { label: "อัตรากำไรสุทธิ", value: stock.details.profit_margin, is_percent: true },
+                    { label: "อัตรากำไรขั้นต้น", value: stock.details.gross_margin, is_percent: true },
+                    { label: "อัตรากำไรจากการดำเนินงาน", value: stock.details.operating_margin, is_percent: true },
+                    { label: "รายได้เติบโต", value: stock.revenue_growth, is_percent: true },
+                    { label: "กำไรเติบโต", value: stock.ebitda_growth, is_percent: true },
+                    { label: "Current Ratio", value: stock.details.current_ratio, is_percent: false },
+                    { label: "Quick Ratio", value: stock.details.quick_ratio, is_percent: false },
+                    { label: "Book Value", value: stock.details.book_value, is_percent: false },
+                    { label: "Beta", value: stock.beta, is_percent: false },
+                    { label: "52W High", value: stock.high_52, is_percent: false },
+                    { label: "52W Low", value: stock.low_52, is_percent: false }
                 ];
 
                 let ratioHtml = "";
                 ratios.forEach(r => {
                     let val = r.value;
                     
-                    // Special handling for pre-formatted or raw values
-                    if (r.label === "Market Cap (B)") {
-                         // Already formatted above (divided by 1B)
+                    // Special handling based on flags
+                    if (r.is_mcap) {
                          val = formatNumber(val);
-                    } else if (r.label === "Revenue Growth" || r.label === "Earnings Growth") {
-                         // Growth rates are decimals (0.20 for 20%), so multiply by 100
-                         let raw = parseFloat(r.value);
-                         if (!isNaN(raw)) {
-                             val = formatNumber(raw * 100) + "%";
-                         } else {
-                             val = "-";
-                         }
-                    } else if (r.label === "Dividend Yield") {
-                         // Dividend Yield is percentage (5.64), format as number + %
+                    } else if (r.is_percent) {
+                         // All these are now guaranteed to be in Percentage Scale
                          let raw = parseFloat(r.value);
                          if (!isNaN(raw)) {
                              val = formatNumber(raw) + "%";
@@ -595,28 +606,6 @@
                          }
                     } else {
                          val = formatNumber(r.value);
-                    }
-
-                    if (r.label.includes("Margin") || r.label.includes("ROE") || r.label.includes("ROA") || r.label.includes("DDM Discount Rate")) {
-                         // These are usually decimals (0.15), convert to %
-                         // BUT wait, check if already formatted?
-                         // ROE from yfinance is 0.15. Margin is 0.10.
-                         // DDM Discount Rate is manually set as number (10.0) -> so no need to multiply?
-                         // Let's handle carefully.
-                         
-                         let raw = parseFloat(r.value);
-                         if (!isNaN(raw)) {
-                             if (r.label.includes("DDM Discount Rate")) {
-                                 // Already percentage (10.0)
-                                 val = formatNumber(raw) + "%";
-                             } else if (Math.abs(raw) <= 1.0) {
-                                 // Likely decimal, convert to %
-                                 val = formatNumber(raw * 100) + "%";
-                             } else {
-                                 // Likely already %, just add symbol
-                                 val = formatNumber(raw) + "%";
-                             }
-                         }
                     }
                     // Dividend Yield handled above
                     // if (r.label === "Dividend Yield" && val !== "-") val += "%";
@@ -1209,8 +1198,8 @@
                 let peForward = formatNumber(stock.pe_forward);
                 let pbv = formatNumber(stock.details.price_to_book);
                 let de = formatNumber(stock.details.debt_to_equity);
-                let roa = stock.details.roa ? formatNumber(stock.details.roa * 100) : "-";
-                let roe = stock.details.roe ? formatNumber(stock.details.roe * 100) : "-";
+                let roa = stock.details.roa ? formatNumber(stock.details.roa) : "-";
+                let roe = stock.details.roe ? formatNumber(stock.details.roe) : "-";
                 let beta = formatNumber(stock.beta);
                 let high52 = formatNumber(stock.high_52);
                 let low52 = formatNumber(stock.low_52);

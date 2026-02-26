@@ -1,10 +1,13 @@
 import json
 import os
 import sqlite3
+import time
+import random
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 import yfinance as yf
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
+from deep_translator import GoogleTranslator
 
 # Set yfinance cache path to a local directory to avoid permission issues
 try:
@@ -74,6 +77,9 @@ def init_db():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS stocks
                  (symbol TEXT PRIMARY KEY)''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS translations
+                 (symbol TEXT PRIMARY KEY, description_th TEXT)''')
     
     # Check if empty
     c.execute('SELECT count(*) FROM stocks')
@@ -149,6 +155,28 @@ def clear_all_stocks_db():
     conn = get_db_connection()
     try:
         conn.execute('DELETE FROM stocks')
+        conn.commit()
+    except:
+        pass
+    finally:
+        conn.close()
+
+def get_translation_db(symbol):
+    conn = get_db_connection()
+    try:
+        row = conn.execute('SELECT description_th FROM translations WHERE symbol = ?', (symbol,)).fetchone()
+        if row:
+            return row['description_th']
+    except:
+        pass
+    finally:
+        conn.close()
+    return None
+
+def save_translation_db(symbol, text):
+    conn = get_db_connection()
+    try:
+        conn.execute('INSERT OR REPLACE INTO translations (symbol, description_th) VALUES (?, ?)', (symbol, text))
         conn.commit()
     except:
         pass
@@ -533,6 +561,28 @@ def get_stock_data(ticker):
             if (eg != "-" and eg < 0) or (get_float("revenueGrowth") != "-" and get_float("revenueGrowth") < 0):
                 is_value_trap = True
 
+        # Translate Description to Thai
+        description_en = get_val("longBusinessSummary", "-")
+        description_th = description_en
+        
+        # Check cache first
+        cached_desc = get_translation_db(ticker)
+        if cached_desc:
+            description_th = cached_desc
+        elif description_en != "-" and len(description_en) > 10:
+            try:
+                # Random delay to avoid hitting rate limits with multiple threads
+                time.sleep(random.uniform(0.1, 1.0))
+                
+                # Limit length to avoid timeout or excessive usage
+                text_to_translate = description_en[:4500] 
+                description_th = GoogleTranslator(source='auto', target='th').translate(text_to_translate)
+                # Save to cache
+                save_translation_db(ticker, description_th)
+            except Exception as e:
+                print(f"Translation Error {ticker}: {e}")
+                pass
+
         return {
             "symbol": ticker,
             "name": get_val("longName", ticker),
@@ -563,11 +613,11 @@ def get_stock_data(ticker):
             "score_details": score_details,
             "is_value_trap": is_value_trap,
             "details": {
-                "roa": get_val("returnOnAssets", "-"),
-                "roe": get_val("returnOnEquity", "-"),
-                "gross_margin": get_val("grossMargins", "-"),
-                "operating_margin": get_val("operatingMargins", "-"),
-                "profit_margin": get_val("profitMargins", "-"),
+                "roa": get_float("returnOnAssets", 100),
+                "roe": get_float("returnOnEquity", 100),
+                "gross_margin": get_float("grossMargins", 100),
+                "operating_margin": get_float("operatingMargins", 100),
+                "profit_margin": get_float("profitMargins", 100),
                 "debt_to_equity": debt_to_equity,
                 "current_ratio": get_val("currentRatio", "-"),
                 "quick_ratio": get_val("quickRatio", "-"),
@@ -575,7 +625,7 @@ def get_stock_data(ticker):
                 "price_to_book": get_val("priceToBook", "-"),
                 "industry": get_val("industry", "-"),
                 "sector": get_val("sector", "-"),
-                "description": get_val("longBusinessSummary", "-")
+                "description": description_th
             }
         }
     except Exception as e:
