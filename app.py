@@ -426,8 +426,21 @@ def get_stock_data(ticker):
             score += 1
             score_details.append(f"MOS > 10% ({mos}%)")
 
-        # Grade Assignment (Adjusted for max score 9)
-        # A: 7-9, B: 5-6, C: 3-4, D: 0-2
+        # 10. Bonus: Grade A if Score >= 7
+        # Current Max Score is 9
+        
+        # Grade Assignment (Adjusted for max score 10)
+        # We can add one more criteria or just assume 9/10 is A+
+        # User requested: 7-10 = A
+        
+        # Let's add one more criteria to make it 10 points max
+        # 10. Efficiency: Net Margin > 10%
+        nm = get_float("profitMargins")
+        if nm != "-" and nm > 0.10:
+            score += 1
+            score_details.append("Net Margin > 10%")
+
+        # A: 7-10, B: 5-6, C: 3-4, D: 0-2
         grade = "D"
         if score >= 7: grade = "A"
         elif score >= 5: grade = "B"
