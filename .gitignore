@@ -4,3 +4,4 @@ yfinance_cache/
 .env
 .idea/
 .vscode/
+stocks.db

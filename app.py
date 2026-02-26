@@ -58,20 +58,17 @@ INITIAL_STOCKS = [
 ]
 
 def get_db_connection():
-    # If on Vercel and DB not in /tmp, initialize it (copy from source or create new)
-    if IS_VERCEL and not os.path.exists(DB_PATH):
-        # On Vercel, copy the bundled DB to /tmp
-        if os.path.exists(DB_FILE):
-             shutil.copy2(DB_FILE, DB_PATH)
-        else:
-             # Should not happen if we bundle it, but safe fallback
-             pass
-             
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
+    # If on Vercel and DB not in /tmp, initialize it (copy from source or create new)
+    if IS_VERCEL and not os.path.exists(DB_PATH):
+        # On Vercel, copy the bundled DB to /tmp
+        if os.path.exists(DB_FILE):
+             shutil.copy2(DB_FILE, DB_PATH)
+    
     # Only run init if we are creating a fresh DB
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -104,12 +101,19 @@ def init_db():
     conn.close()
 
 # Initialize DB on startup
-with app.app_context():
-    if IS_VERCEL:
-        if not os.path.exists(DB_PATH):
-             init_db()
-    else:
-        init_db()
+# Use before_request to avoid cold start timeouts
+@app.before_request
+def initialize():
+    if not getattr(app, 'db_initialized', False):
+        try:
+            init_db()
+            app.db_initialized = True
+        except Exception as e:
+            print(f"DB Init Error: {e}")
+
+@app.route('/health')
+def health_check():
+    return jsonify({"status": "ok", "vercel": IS_VERCEL})
 
 def load_stocks():
     # Helper to get connection based on environment
