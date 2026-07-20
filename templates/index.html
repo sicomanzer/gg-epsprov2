@@ -51,9 +51,59 @@
             </div>
         </div>
 
+        {% if status_message %}
+        <div class="alert alert-{{ status_level }} alert-dismissible fade show shadow-sm" role="alert">
+            {{ status_message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endif %}
+
         <!-- Summary Cards -->
         <div class="row mb-4" id="summary-section" style="display:none;">
-            <!-- ... existing summary cards ... -->
+            <div class="col-12 col-md-6 col-xl-3 mb-3">
+                <div class="card card-summary bg-white h-100">
+                    <div class="card-body d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="text-muted small">จำนวนหุ้นทั้งหมด</div>
+                            <div class="fs-3 fw-bold" id="total-stocks">0</div>
+                        </div>
+                        <i class="bi bi-collection card-icon text-primary"></i>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12 col-md-6 col-xl-3 mb-3">
+                <div class="card card-summary bg-white h-100">
+                    <div class="card-body d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="text-muted small">ค่าเฉลี่ย P/E</div>
+                            <div class="fs-3 fw-bold" id="avg-pe">0.00</div>
+                        </div>
+                        <i class="bi bi-speedometer2 card-icon text-warning"></i>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12 col-md-6 col-xl-3 mb-3">
+                <div class="card card-summary bg-white h-100">
+                    <div class="card-body d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="text-muted small">Yield เฉลี่ย</div>
+                            <div class="fs-3 fw-bold" id="avg-yield">0.00%</div>
+                        </div>
+                        <i class="bi bi-cash-coin card-icon text-success"></i>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12 col-md-6 col-xl-3 mb-3">
+                <div class="card card-summary bg-white h-100">
+                    <div class="card-body d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="text-muted small">มูลค่าตลาดรวม</div>
+                            <div class="fs-3 fw-bold" id="total-mkt-cap">0.00 T</div>
+                        </div>
+                        <i class="bi bi-bank card-icon text-info"></i>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Top 5 Recommended Stocks Section -->
@@ -127,9 +177,9 @@
             <div class="d-flex flex-wrap gap-2 mb-3">
                  <button id="filterGrowthBtn" class="btn btn-primary shadow-sm"><i class="bi bi-graph-up"></i> คัดกรองหุ้นเติบโต</button>
                  <button id="filterDivGrowthBtn" class="btn btn-info shadow-sm text-white"><i class="bi bi-piggy-bank"></i> คัดหุ้นปันผลเติบโต (10Y)</button>
-                 <button id="filterUndervaluedBtn" class="btn btn-warning shadow-sm"><i class="bi bi-currency-dollar"></i> คัดราคา < DDM</button>
-                 <button id="filterGradeABtn" class="btn btn-success shadow-sm" title="คัดหุ้นเกรด A (Score >= 6)"><i class="bi bi-star-fill"></i> คัดหุ้นเกรด A (Guru)</button>
-                 <button id="filterSniperBtn" class="btn btn-danger shadow-sm" title="Score A + MOS > 10% + RSI < 50"><i class="bi bi-crosshair"></i> Sniper Mode (Superhuman)</button>
+                 <button id="filterUndervaluedBtn" class="btn btn-warning shadow-sm"><i class="bi bi-currency-dollar"></i> คัดราคา < Fair Value</button>
+                 <button id="filterGradeABtn" class="btn btn-success shadow-sm" title="คัดหุ้นเกรด A (Score >= {{ grade_a_min_score }})"><i class="bi bi-star-fill"></i> คัดหุ้นเกรด A (Guru)</button>
+                 <button id="filterSniperBtn" class="btn btn-danger shadow-sm" title="Grade A + MOS > {{ sniper_min_mos }}% + RSI < 50"><i class="bi bi-crosshair"></i> Sniper Mode (Superhuman)</button>
             </div>
 
             <div id="loading" class="loading">
@@ -145,7 +195,7 @@
                         <tr>
                             <th>#</th>
                             <th>ชื่อหุ้น</th>
-                            <th>แนวโน้มกำไร (5ปี)</th>
+                            <th>แนวโน้มกำไร (10ปี)</th>
                             <th>แนวโน้มปันผล (10ปี)</th>
                             <th>ราคา (บาท)</th>
                             <th>P/E (ปัจจุบัน)</th>
@@ -208,7 +258,7 @@
                     
                     <div class="row mb-4">
                         <div class="col-md-6">
-                            <h5 class="border-bottom pb-2 mb-3">แนวโน้มกำไรต่อหุ้น (EPS) 5 ปี</h5>
+                            <h5 class="border-bottom pb-2 mb-3">แนวโน้มกำไรต่อหุ้น (EPS) 10 ปี</h5>
                             <canvas id="epsChart"></canvas>
                         </div>
                         <div class="col-md-6">
@@ -242,6 +292,7 @@
                 <div class="modal-body">
                     <h6 class="mb-3 border-bottom pb-2">จัดการรายชื่อหุ้น</h6>
                     <form action="/add" method="POST" class="mb-4">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                         <div class="mb-2">
                             <label for="tickerInput" class="form-label text-muted small">เพิ่มหุ้น (บรรทัดละ 1 ชื่อ หรือคั่นด้วยเครื่องหมายจุลภาค ,)</label>
                             <textarea name="ticker" id="tickerInput" class="form-control" rows="5" placeholder="AAV&#10;ADVANC&#10;AEONTS&#10;AMATA&#10;AOT" required></textarea>
@@ -250,8 +301,34 @@
                     </form>
                     
                     <form action="/clear_all" method="POST" class="mb-4" onsubmit="return confirm('คุณแน่ใจหรือไม่ที่จะลบรายชื่อหุ้นทั้งหมด? การกระทำนี้ไม่สามารถย้อนกลับได้');">
-                        <button type="submit" class="btn btn-outline-danger w-100"><i class="bi bi-trash"></i> ลบรายชื่อหุ้นทั้งหมด</button>
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button type="submit" class="btn btn-outline-danger w-100"><i class="bi bi-trash"></i> ลบหุ้นที่เพิ่มเองทั้งหมด</button>
                     </form>
+
+                    <h6 class="mb-3 border-bottom pb-2">ซิงก์ SET100 อัตโนมัติ</h6>
+                    <div class="bg-light border rounded p-3 mb-3 small">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="text-muted">สถานะล่าสุด</span>
+                            {% if sync_status.last_status == 'success' %}
+                            <span class="badge bg-success">สำเร็จ</span>
+                            {% elif sync_status.last_status == 'error' %}
+                            <span class="badge bg-danger">ผิดพลาด</span>
+                            {% else %}
+                            <span class="badge bg-secondary">รอดำเนินการ</span>
+                            {% endif %}
+                        </div>
+                        <div class="mb-1"><span class="text-muted">ข้อความ:</span> {{ sync_status.last_message or '-' }}</div>
+                        <div class="mb-1"><span class="text-muted">ซิงก์ล่าสุด:</span> {{ sync_status.last_synced_at or '-' }}</div>
+                        <div class="mb-1"><span class="text-muted">สำเร็จล่าสุด:</span> {{ sync_status.last_success_at or '-' }}</div>
+                        <div class="mb-1"><span class="text-muted">จำนวน SET100 ล่าสุด:</span> {{ sync_status.total_symbols or 0 }}</div>
+                        <div class="mb-1"><span class="text-muted">ผลต่างรอบล่าสุด:</span> เพิ่ม {{ sync_status.added_count or 0 }} / เอาออก {{ sync_status.removed_count or 0 }}</div>
+                        <div><span class="text-muted">โหมดล่าสุด:</span> {{ sync_status.mode or '-' }}</div>
+                    </div>
+                    <form action="/sync_set100" method="POST" class="mb-4">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button type="submit" class="btn btn-warning w-100"><i class="bi bi-arrow-repeat"></i> ซิงก์ SET100 ตอนนี้</button>
+                    </form>
+                    <p class="text-muted small mt-n2 mb-4">ระบบจะพยายามซิงก์รายชื่อ SET100 ให้อัตโนมัติเมื่อข้อมูลเก่าเกินรอบ และยังสามารถกดซิงก์เองได้ทุกเมื่อ</p>
 
                     <h6 class="mb-3 border-bottom pb-2">จัดการข้อมูล</h6>
                     <button id="refreshBtn" class="btn btn-success shadow-sm w-100"><i class="bi bi-arrow-clockwise"></i> อัปเดตข้อมูลล่าสุด</button>
@@ -269,6 +346,12 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
 
     <script>
+        const APP_CONFIG = {
+            csrfToken: {{ csrf_token|tojson }},
+            gradeAMinScore: {{ grade_a_min_score|tojson }},
+            sniperMinMos: {{ sniper_min_mos|tojson }}
+        };
+
         $(document).ready(function() {
             var table = $('#stockTable').DataTable({
                 "pageLength": 50,
@@ -296,6 +379,104 @@
             function formatNumber(num, decimals=2) {
                 if (num === "-" || num === null || num === undefined) return "-";
                 return parseFloat(num).toFixed(decimals);
+            }
+
+            function safeNumber(value) {
+                const parsed = parseFloat(value);
+                return Number.isFinite(parsed) ? parsed : null;
+            }
+
+            function escapeHtml(value) {
+                return String(value ?? '')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
+
+            function toNumericSeries(values) {
+                return (values || []).map((value) => safeNumber(value));
+            }
+
+            function average(values) {
+                if (!values || values.length === 0) return null;
+                const valid = values.filter((value) => value !== null);
+                if (valid.length === 0) return null;
+                return valid.reduce((sum, value) => sum + value, 0) / valid.length;
+            }
+
+            function getPositiveYearCount(values) {
+                return toNumericSeries(values).filter((value) => value !== null && value > 0).length;
+            }
+
+            function getEarliestPositive(values) {
+                return toNumericSeries(values).find((value) => value !== null && value > 0) ?? null;
+            }
+
+            function getTrendCagr(values) {
+                const numericSeries = toNumericSeries(values);
+                const startIndex = numericSeries.findIndex((value) => value !== null && value > 0);
+                const endIndex = [...numericSeries].reverse().findIndex((value) => value !== null && value > 0);
+                if (startIndex === -1 || endIndex === -1) return null;
+
+                const finalIndex = numericSeries.length - 1 - endIndex;
+                if (finalIndex <= startIndex) return null;
+
+                const startValue = numericSeries[startIndex];
+                const endValue = numericSeries[finalIndex];
+                if (startValue === null || endValue === null || startValue <= 0 || endValue <= 0) return null;
+
+                const periods = finalIndex - startIndex;
+                return Math.pow(endValue / startValue, 1 / periods) - 1;
+            }
+
+            function hasStrongDividendGrowth(stock) {
+                const trend = toNumericSeries(stock.div_trend);
+                if (trend.length < 10) return false;
+
+                const positiveYears = trend.filter((value) => value !== null && value > 0).length;
+                if (positiveYears < 7) return false;
+
+                const latest = trend[trend.length - 1];
+                const previous = trend[trend.length - 2];
+                const avgLast3 = average(trend.slice(-3));
+                const avgPrev3 = average(trend.slice(-6, -3));
+                const firstPositive = getEarliestPositive(trend);
+                const cagr = getTrendCagr(trend);
+                const last3 = trend.slice(-3);
+
+                if (latest === null || latest <= 0 || previous === null) return false;
+                if (latest <= previous) return false;
+                if (avgLast3 === null || avgPrev3 === null || avgLast3 <= avgPrev3) return false;
+                if (firstPositive === null || latest <= firstPositive) return false;
+                if (cagr === null || cagr <= 0) return false;
+                if (last3.some((value) => value === null || value <= 0)) return false;
+                if (latest <= avgPrev3) return false;
+
+                return true;
+            }
+
+            function hasStrongEpsGrowth(stock) {
+                const trend = toNumericSeries(stock.eps_trend);
+                if (trend.length < 6) return false;
+
+                const latest = trend[trend.length - 1];
+                const previous = trend[trend.length - 2];
+                const last3 = trend.slice(-3);
+                const avgLast3 = average(last3);
+                const avgPrev3 = average(trend.slice(-6, -3));
+                const firstPositive = getEarliestPositive(trend);
+                const cagr = getTrendCagr(trend);
+
+                if (latest === null || previous === null || firstPositive === null) return false;
+                if (last3.some((value) => value === null || value < 0)) return false;
+                if (latest < previous) return false;
+                if (avgLast3 === null || avgPrev3 === null || avgLast3 <= avgPrev3) return false;
+                if (latest <= firstPositive) return false;
+                if (cagr === null || cagr <= 0) return false;
+
+                return true;
             }
 
             function getColorClass(val) {
@@ -374,10 +555,10 @@
                     }
                     
                     // 2. EPS Consistency: Must not have negative EPS in last 2 years
-                    // eps_trend is 5 years. Last 2 years are index 3,4
-                    if (stock.eps_trend && stock.eps_trend.length >= 5) {
-                        let lastYearEPS = stock.eps_trend[4];
-                        let prevYearEPS = stock.eps_trend[3];
+                    if (stock.eps_trend && stock.eps_trend.length >= 2) {
+                        let len = stock.eps_trend.length;
+                        let lastYearEPS = stock.eps_trend[len - 1];
+                        let prevYearEPS = stock.eps_trend[len - 2];
                         // If any of the last 2 years is negative, exclude (Turnaround is risky)
                         if ((lastYearEPS !== null && lastYearEPS < 0) || (prevYearEPS !== null && prevYearEPS < 0)) {
                             return false;
@@ -409,10 +590,10 @@
                 container.empty();
 
                 top5.forEach(stock => {
-                    let mosVal = parseFloat(stock.mos);
+                    let mosVal = safeNumber(stock.mos);
                     let mosClass = "text-muted";
                     let mosSign = "";
-                    if (!isNaN(mosVal)) {
+                    if (mosVal !== null) {
                         if (mosVal > 20) mosClass = "text-success fw-bold";
                         else if (mosVal > 0) mosClass = "text-success";
                         else mosClass = "text-danger";
@@ -420,16 +601,18 @@
                         if (mosVal > 0) mosSign = "+";
                     }
                     
+                    const safeSymbol = escapeHtml(stock.symbol);
+                    const safeName = escapeHtml(stock.name);
                     let cardHtml = `
                     <div class="col-12 col-md-4 col-lg-2 flex-grow-1">
                         <div class="card h-100 border-0 shadow-sm" style="min-width: 200px;">
                             <div class="card-body p-3">
                                 <div class="d-flex justify-content-between align-items-start mb-2">
                                     <div>
-                                        <h5 class="fw-bold mb-0 text-primary stock-link" onclick="showStockDetail('${stock.symbol}')" style="cursor:pointer;">
-                                            <i class="bi bi-award-fill text-warning"></i> ${stock.symbol}
+                                        <h5 class="fw-bold mb-0 text-primary stock-link" onclick="showStockDetail('${safeSymbol}')" style="cursor:pointer;">
+                                            <i class="bi bi-award-fill text-warning"></i> ${safeSymbol}
                                         </h5>
-                                        <small class="text-muted text-truncate d-block" style="max-width: 120px;" title="${stock.name}">${stock.name}</small>
+                                        <small class="text-muted text-truncate d-block" style="max-width: 120px;" title="${safeName}">${safeName}</small>
                                     </div>
                                     <div class="text-end">
                                         <h5 class="fw-bold mb-0">฿${formatNumber(stock.price)}</h5>
@@ -491,22 +674,22 @@
                             // Metrics calculation
                             totalStocks++;
                             if (stock.pe_trailing !== "-" && stock.pe_trailing !== null) {
-                                let pe = parseFloat(stock.pe_trailing);
-                                if (isFinite(pe) && pe > 0) {
+                                let pe = safeNumber(stock.pe_trailing);
+                                if (pe !== null && pe > 0) {
                                     totalPE += pe;
                                     peCount++;
                                 }
                             }
                             if (stock.dividend_yield !== "-" && stock.dividend_yield !== null) {
-                                let dy = parseFloat(stock.dividend_yield);
-                                if (isFinite(dy) && dy > 0) {
+                                let dy = safeNumber(stock.dividend_yield);
+                                if (dy !== null && dy > 0) {
                                     totalYield += dy;
                                     yieldCount++;
                                 }
                             }
                             if (stock.market_cap !== "-" && stock.market_cap !== null) {
-                                let mc = parseFloat(stock.market_cap);
-                                if (isFinite(mc) && mc > 0) {
+                                let mc = safeNumber(stock.market_cap);
+                                if (mc !== null && mc > 0) {
                                     totalMktCap += mc;
                                 }
                             }
@@ -575,7 +758,7 @@
                     { label: "มูลค่า Graham", value: stock.graham_number, is_percent: false },
                     { label: "มูลค่า Lynch", value: stock.lynch_value, is_percent: false },
                     { label: "อัตราคิดลด (k)", value: stock.ddm_k, is_percent: true },
-                    { label: "มูลค่าตลาด (พันล้าน)", value: (stock.market_cap / 1000000000).toFixed(2), is_percent: false, is_mcap: true },
+                    { label: "มูลค่าตลาด (พันล้าน)", value: safeNumber(stock.market_cap) !== null ? (safeNumber(stock.market_cap) / 1000000000).toFixed(2) : "-", is_percent: false, is_mcap: true },
                     { label: "อัตรากำไรสุทธิ", value: stock.details.profit_margin, is_percent: true },
                     { label: "อัตรากำไรขั้นต้น", value: stock.details.gross_margin, is_percent: true },
                     { label: "อัตรากำไรจากการดำเนินงาน", value: stock.details.operating_margin, is_percent: true },
@@ -738,17 +921,15 @@
                 let epsLabels = [];
                 let epsData = [];
                 
-                // eps_trend is aligned to [currentYear-5, ..., currentYear-1]
-                // years_eps = [current_year - 5, current_year - 4, current_year - 3, current_year - 2, current_year - 1]
-                for (let i = 0; i < 5; i++) {
-                    epsLabels.push(currentYear - 5 + i);
+                let epsYears = stock.eps_trend && stock.eps_trend.length > 0 ? stock.eps_trend.length : 10;
+                for (let i = 0; i < epsYears; i++) {
+                    epsLabels.push(currentYear - epsYears + i);
                 }
-                
-                // If stock.eps_trend is missing or partial, fill with null
-                if (stock.eps_trend) {
-                     epsData = stock.eps_trend;
+
+                if (stock.eps_trend && stock.eps_trend.length > 0) {
+                    epsData = stock.eps_trend;
                 } else {
-                     epsData = [null, null, null, null, null];
+                    epsData = Array(epsYears).fill(null);
                 }
 
                 const ctxEps = document.getElementById('epsChart').getContext('2d');
@@ -817,41 +998,9 @@
             // Filter Growth Stocks Function
             function filterGrowthStocks() {
                 if (!stocksData || stocksData.length === 0) return;
-                
-                // Filter criteria:
-                // 1. EPS Trend is growing (last year > first year in 5Y trend)
-                // 2. Dividend Trend is growing (last year > first year in 10Y trend or generally positive)
-                // Let's use a simple slope check or compare start vs end
-                
-                let growthStocks = stocksData.filter(stock => {
-                    let isEpsGrowing = false;
-                    if (stock.eps_trend && stock.eps_trend.length >= 2) {
-                        let len = stock.eps_trend.length;
-                        let latest = stock.eps_trend[len - 1];
-                        let prev = stock.eps_trend[len - 2];
-                        let first = stock.eps_trend[0];
-                        
-                        // Condition: Long term growth AND Recent growth (not declining)
-                        if (latest > first && latest >= prev) {
-                             isEpsGrowing = true;
-                        }
-                    }
 
-                    let isDivGrowing = false;
-                    if (stock.div_trend && stock.div_trend.length >= 2) {
-                        let len = stock.div_trend.length;
-                        let latest = stock.div_trend[len - 1];
-                        let prev = stock.div_trend[len - 2];
-                        let first = stock.div_trend[0];
-                        
-                        // Condition: Long term growth AND Recent growth (not declining significantly)
-                        // Allow flat dividend but trend should be up
-                        if (latest >= first && latest >= prev) {
-                             isDivGrowing = true;
-                        }
-                    }
-                    
-                    return isEpsGrowing && isDivGrowing;
+                let growthStocks = stocksData.filter(stock => {
+                    return hasStrongEpsGrowth(stock) && hasStrongDividendGrowth(stock);
                 });
                 
                 if (growthStocks.length === 0) {
@@ -882,48 +1031,7 @@
                 if (!stocksData || stocksData.length === 0) return;
                 
                 let divGrowthStocks = stocksData.filter(stock => {
-                    if (stock.div_trend && stock.div_trend.length >= 5) {
-                        let trend = stock.div_trend;
-                        let len = trend.length;
-                        
-                        // Refined Logic based on user feedback (avoid declining trend at the end)
-                        
-                        // 1. Long-term Growth: Latest Year > First Year (or 5 years ago)
-                        let latest = trend[len-1];
-                        let first = trend[0];
-                        let mid = trend[Math.floor(len/2)];
-                        
-                        if (latest <= first) return false; // Must be higher than start
-                        
-                        // 2. Recent Stability/Growth: 
-                        // The average of the last 3 years should not be significantly lower than the previous 3 years
-                        // OR simply, Latest year should not be the lowest in the last 3-5 years if it was high before.
-                        
-                        // User mentioned stocks like DOHOME, CHG, CBG, etc. where they might have peaked and are now going down.
-                        // Example BANPU: 0.6 -> ... -> 1.0 -> 0.38 -> 0.24 (Declining recently)
-                        
-                        // Check recent trend (Last 3 years)
-                        // If 2023 > 2024 > 2025 (Declining), maybe exclude?
-                        // Let's enforce that Latest Year >= Average of Last 3 Years (roughly) OR Latest >= Previous Year
-                        
-                        // Let's use a stricter rule:
-                        // - Latest > First
-                        // - Latest > 5-Year Ago (mid point)
-                        // - Trend slope of last 3 years shouldn't be strongly negative
-                        
-                        // Calculate Slope of last 3 points
-                        if (len >= 3) {
-                            let y3 = trend[len-3];
-                            let y2 = trend[len-2];
-                            let y1 = trend[len-1]; // Latest
-                            
-                            // If strictly declining for 2 years straight (y3 > y2 > y1), exclude
-                            if (y3 > y2 && y2 > y1) return false;
-                        }
-                        
-                        return true;
-                    }
-                    return false;
+                    return hasStrongDividendGrowth(stock);
                 });
                 
                 if (divGrowthStocks.length === 0) {
@@ -947,22 +1055,23 @@
                 resetOtherButtons('divGrowth');
             }
 
-            // Filter Undervalued Stocks Function (Price < DDM)
+            // Filter Undervalued Stocks Function (Price < Fair Value)
             function filterUndervaluedStocks() {
                 if (!stocksData || stocksData.length === 0) return;
                 
                 let undervaluedStocks = stocksData.filter(stock => {
-                    let price = parseFloat(stock.price);
-                    let ddm = parseFloat(stock.ddm_value);
+                    let price = safeNumber(stock.price);
+                    let fairValue = safeNumber(stock.fair_value);
+                    let mos = safeNumber(stock.mos);
                     
-                    if (!isNaN(price) && !isNaN(ddm) && price > 0 && ddm > 0) {
-                        return price < ddm;
+                    if (price !== null && fairValue !== null && price > 0 && fairValue > 0) {
+                        return price < fairValue;
                     }
-                    return false;
+                    return mos !== null && mos > 0;
                 });
                 
                 if (undervaluedStocks.length === 0) {
-                    alert("ไม่พบหุ้นที่ราคาต่ำกว่า DDM ในขณะนี้");
+                    alert("ไม่พบหุ้นที่ราคาต่ำกว่ามูลค่ายุติธรรมในขณะนี้");
                     return;
                 }
 
@@ -1047,14 +1156,14 @@
                     
                     // ROA > X
                     if (pass && !isNaN(criteria.roa)) {
-                        let val = parseFloat(stock.details.roa); // usually decimal like 0.05
-                        if (isNaN(val) || (val * 100) <= criteria.roa) pass = false;
+                        let val = parseFloat(stock.details.roa);
+                        if (isNaN(val) || val <= criteria.roa) pass = false;
                     }
                     
                     // ROE > X
                     if (pass && !isNaN(criteria.roe)) {
                         let val = parseFloat(stock.details.roe);
-                        if (isNaN(val) || (val * 100) <= criteria.roe) pass = false;
+                        if (isNaN(val) || val <= criteria.roe) pass = false;
                     }
                     
                     // Yield > X
@@ -1115,7 +1224,7 @@
                 }
                 if (activeFilter !== 'undervalued') {
                      if ($('#filterUndervaluedBtn').hasClass('btn-secondary')) {
-                         $('#filterUndervaluedBtn').html('<i class="bi bi-currency-dollar"></i> คัดราคา < DDM');
+                        $('#filterUndervaluedBtn').html('<i class="bi bi-currency-dollar"></i> คัดราคา < Fair Value');
                          $('#filterUndervaluedBtn').removeClass('btn-secondary').addClass('btn-warning');
                          $('#filterUndervaluedBtn').off('click').click(filterUndervaluedStocks);
                      }
@@ -1153,18 +1262,18 @@
                 // Criteria: Grade A (Score >= 7) + MOS > 10% + RSI < 50
                 let sniperStocks = stocksData.filter(stock => {
                     let score = stock.score !== undefined ? stock.score : 0;
-                    let mos = parseFloat(stock.mos);
-                    let rsi = parseFloat(stock.rsi);
+                    let mos = safeNumber(stock.mos);
+                    let rsi = safeNumber(stock.rsi);
                     
-                    let isGradeA = score >= 6; // Relax to >= 6 (Grade A cutoff)
-                    let isSafe = !isNaN(mos) && mos > 10;
-                    let isCheap = !isNaN(rsi) && rsi < 50; 
+                    let isGradeA = stock.grade === "A" && score >= APP_CONFIG.gradeAMinScore;
+                    let isSafe = mos !== null && mos > APP_CONFIG.sniperMinMos;
+                    let isCheap = rsi !== null && rsi < 50; 
                     
                     return isGradeA && isSafe && isCheap;
                 });
                 
                 if (sniperStocks.length === 0) {
-                    alert("ไม่พบหุ้น 'Sniper Mode' (Grade A + MOS > 10% + RSI < 50) ในขณะนี้");
+                    alert(`ไม่พบหุ้น 'Sniper Mode' (Grade A + MOS > ${APP_CONFIG.sniperMinMos}% + RSI < 50) ในขณะนี้`);
                     return;
                 }
 
@@ -1184,11 +1293,8 @@
             }
 
             function addStockRow(stock, index) {
-                // Metrics calculation (can be skipped for display only, or recalculated if needed for summary)
-                // For now, just display logic
-                
-                // Format numbers
-                let marketCap = (stock.market_cap / 1000000000).toFixed(2); // Billions
+                let marketCapRaw = safeNumber(stock.market_cap);
+                let marketCap = marketCapRaw !== null ? (marketCapRaw / 1000000000).toFixed(2) : "-";
                 let divYield = formatNumber(stock.dividend_yield);
                 let divRate = formatNumber(stock.dividend_rate);
                 let revGrowth = formatNumber(stock.revenue_growth);
@@ -1198,8 +1304,8 @@
                 let peForward = formatNumber(stock.pe_forward);
                 let pbv = formatNumber(stock.details.price_to_book);
                 let de = formatNumber(stock.details.debt_to_equity);
-                let roa = stock.details.roa ? formatNumber(stock.details.roa) : "-";
-                let roe = stock.details.roe ? formatNumber(stock.details.roe) : "-";
+                let roa = formatNumber(stock.details.roa);
+                let roe = formatNumber(stock.details.roe);
                 let beta = formatNumber(stock.beta);
                 let high52 = formatNumber(stock.high_52);
                 let low52 = formatNumber(stock.low_52);
@@ -1214,7 +1320,14 @@
                 else if (grade === "C") scoreColor = "warning";
                 
                 let scoreDetails = stock.score_details ? stock.score_details.join("\n") : "";
-                let scoreHtml = `<span class="badge bg-${scoreColor}" title="${scoreDetails}" style="cursor:help; font-size:0.9rem;">${score}/10 (${grade})</span>`;
+                let scoreHtml = `<span class="badge bg-${scoreColor}" title="${escapeHtml(scoreDetails)}" style="cursor:help; font-size:0.9rem;">${score}/10 (${grade})</span>`;
+                if (stock.error) {
+                    scoreHtml += ` <span class="badge bg-secondary" title="${escapeHtml(stock.error)}">ข้อมูลจำกัด</span>`;
+                }
+
+                let sourceBadges = [];
+                if (stock.is_set100) sourceBadges.push('<span class="badge bg-dark-subtle text-dark border ms-1">SET100 Auto</span>');
+                if (stock.is_manual) sourceBadges.push('<span class="badge bg-primary-subtle text-primary border ms-1">Custom</span>');
 
                 let epsTrendChart = "";
                 if (stock.eps_trend && stock.eps_trend.length > 0) {
@@ -1322,24 +1435,40 @@
                 let mos = stock.mos !== undefined ? stock.mos : "-";
                 let mosHtml = `<span class="text-muted">-</span>`;
                 if (mos !== "-") {
-                    let mosVal = parseFloat(mos);
-                    if (mosVal > 20) mosHtml = `<span class="badge bg-success">+${mos}%</span>`;
-                    else if (mosVal > 0) mosHtml = `<span class="text-success fw-bold">+${mos}%</span>`;
-                    else mosHtml = `<span class="text-danger">${mos}%</span>`;
+                    let mosVal = safeNumber(mos);
+                    if (mosVal !== null) {
+                        if (mosVal > 20) mosHtml = `<span class="badge bg-success">+${mos}%</span>`;
+                        else if (mosVal > 0) mosHtml = `<span class="text-success fw-bold">+${mos}%</span>`;
+                        else mosHtml = `<span class="text-danger">${mos}%</span>`;
+                    }
                 }
                 
                 // Determine row highlight
                 let priceStyle = "";
-                let pVal = parseFloat(stock.price);
-                let ddmVal = parseFloat(stock.ddm_value);
+                let pVal = safeNumber(stock.price);
+                let fairVal = safeNumber(stock.fair_value);
                 
-                if (!isNaN(pVal) && !isNaN(ddmVal) && pVal < ddmVal) {
+                if (pVal !== null && fairVal !== null && pVal < fairVal) {
                     priceStyle = "background-color: #d1e7dd; font-weight: bold; color: #0f5132;";
+                }
+
+                const safeSymbol = escapeHtml(stock.symbol);
+                const removeAction = `/remove/${encodeURIComponent(stock.symbol)}`;
+                let removeButtonHtml = '<span class="badge bg-secondary-subtle text-secondary border">SET100 Auto</span>';
+                if (stock.is_manual) {
+                    const confirmText = stock.is_set100
+                        ? 'คุณแน่ใจหรือไม่ที่จะลบหุ้นตัวนี้ออกจากรายการส่วนตัว? หุ้นจะยังอยู่หากยังเป็นสมาชิก SET100'
+                        : 'คุณแน่ใจหรือไม่ที่จะลบหุ้นตัวนี้ออกจากรายการส่วนตัว?';
+                    removeButtonHtml = `
+                        <form action="${removeAction}" method="POST" onsubmit="return confirm('${confirmText}')">
+                            <input type="hidden" name="csrf_token" value="${APP_CONFIG.csrfToken}">
+                            <button type="submit" class="btn btn-outline-danger btn-sm" title="ลบออกจากรายการส่วนตัว"><i class="bi bi-trash"></i></button>
+                        </form>`;
                 }
 
                 table.row.add([
                     index + 1,
-                    `<span class="stock-link" data-symbol="${stock.symbol}" onclick="showStockDetail('${stock.symbol}')">${stock.symbol}</span>`,
+                    `<div><span class="stock-link" data-symbol="${safeSymbol}" onclick="showStockDetail('${safeSymbol}')">${safeSymbol}</span>${sourceBadges.join('')}</div>`,
                     epsTrendChart,
                     divTrendChart,
                     `<span style="${priceStyle}">${price}</span>`,
@@ -1363,7 +1492,7 @@
                     `<span class="${getColorClass(revGrowth)}">${revGrowth}</span>`,
                     `<span class="${getColorClass(earnGrowth)}">${earnGrowth}</span>`,
                     scoreHtml,
-                    `<a href="/remove/${stock.symbol}" class="btn btn-outline-danger btn-sm" onclick="return confirm('คุณแน่ใจหรือไม่ที่จะลบหุ้นตัวนี้?')"><i class="bi bi-trash"></i></a>`
+                    removeButtonHtml
                 ]);
             }
 

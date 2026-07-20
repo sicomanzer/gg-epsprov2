@@ -6,3 +6,4 @@ gunicorn==23.0.0
 deep-translator==1.11.4
 beautifulsoup4==4.14.3
 lxml==6.0.2
+thaifin==1.1.0

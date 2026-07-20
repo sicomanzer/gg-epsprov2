@@ -1,13 +1,26 @@
 import json
+import logging
 import os
+import re
+import secrets
 import sqlite3
 import time
 import random
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from datetime import datetime, timedelta
+from flask import Flask, render_template, request, jsonify, redirect, url_for, session
+import requests
 import yfinance as yf
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 from deep_translator import GoogleTranslator
+from functools import lru_cache
+
+try:
+    from thaifin import Stock as ThaiFinStock
+    THAIFIN_AVAILABLE = True
+except Exception:
+    ThaiFinStock = None
+    THAIFIN_AVAILABLE = False
 
 # Set yfinance cache path to a local directory to avoid permission issues
 try:
@@ -16,6 +29,8 @@ except:
     pass
 
 app = Flask(__name__)
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "gg-epsprov2-dev-secret")
+app.logger.setLevel(logging.INFO)
 
 # --- Vercel Configuration ---
 # Vercel file system is read-only except for /tmp
@@ -24,6 +39,23 @@ import shutil
 
 DB_FILE = 'stocks.db'
 STOCKS_FILE = 'stocks.json' # Keep for migration
+GRADE_A_MIN_SCORE = 7
+SNIPER_MIN_MOS = 10
+API_MAX_WORKERS = int(os.environ.get("MAX_FETCH_WORKERS", "12"))
+TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,14}$")
+SET100_SOURCE_PAGE_URL = "https://www.settrade.com/th/equities/market-data/overview?category=Index&index=SET100"
+SET100_SOURCE_API_URL = "https://www.settrade.com/api/set/index/SET100/composition"
+SET100_AUTO_SYNC_INTERVAL_SECONDS = int(os.environ.get("SET100_AUTO_SYNC_INTERVAL_SECONDS", "43200"))
+SET100_MIN_EXPECTED_SYMBOLS = 80
+REQUEST_HEADERS = {"User-Agent": "Mozilla/5.0"}
+SET100_TICKER_ALIASES = {
+    "BANPUU": "BANPU",
+}
+THAIFIN_TICKER_ALIASES = {
+    "BANPU": "BANPUU",
+}
+EPS_TREND_YEARS = 10
+DIV_TREND_YEARS = 10
 
 # Check if running on Vercel (or any environment where root is read-only)
 # We can check if we can write to the current directory or just default to /tmp in production
@@ -43,8 +75,8 @@ try:
     if not os.path.exists(CACHE_DIR):
         os.makedirs(CACHE_DIR, exist_ok=True)
     yf.set_tz_cache_location(CACHE_DIR)
-except:
-    pass
+except Exception as exc:
+    app.logger.warning("Unable to initialize yfinance cache directory: %s", exc)
 
 # Initial SET100 list
 INITIAL_STOCKS = [
@@ -61,9 +93,403 @@ INITIAL_STOCKS = [
 ]
 
 def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA busy_timeout = 30000')
     return conn
+
+def get_csrf_token():
+    token = session.get("csrf_token")
+    if not token:
+        token = secrets.token_hex(16)
+        session["csrf_token"] = token
+    return token
+
+def is_valid_csrf_token():
+    form_token = request.form.get('csrf_token', '')
+    session_token = session.get('csrf_token', '')
+    return bool(form_token and session_token and secrets.compare_digest(form_token, session_token))
+
+def build_redirect(message, level="success"):
+    return redirect(url_for('index', message=message, level=level))
+
+def normalize_ticker(raw_ticker):
+    if not raw_ticker:
+        return None
+
+    clean_ticker = raw_ticker.upper().strip()
+    if not TICKER_PATTERN.fullmatch(clean_ticker):
+        return None
+    return clean_ticker
+
+def parse_tickers(raw_input):
+    valid = []
+    invalid = []
+
+    for value in re.split(r'[,\s\n]+', raw_input or ""):
+        if not value.strip():
+            continue
+
+        ticker = normalize_ticker(value)
+        if ticker:
+            valid.append(ticker)
+        else:
+            invalid.append(value.strip())
+
+    return sorted(set(valid)), invalid
+
+def build_empty_stock_payload(ticker, error="Data Unavailable"):
+    return {
+        "symbol": ticker,
+        "name": ticker,
+        "price": "-",
+        "pe_trailing": "-",
+        "pe_forward": "-",
+        "market_cap": "-",
+        "dividend_yield": "-",
+        "dividend_rate": "-",
+        "ddm_value": "-",
+        "ddm_k": "-",
+        "graham_number": "-",
+        "lynch_value": "-",
+        "fair_value": "-",
+        "peg": "-",
+        "target_price": "-",
+        "rsi": "-",
+        "mos": "-",
+        "beta": "-",
+        "high_52": "-",
+        "low_52": "-",
+        "bvps": "-",
+        "revenue_growth": "-",
+        "ebitda_growth": "-",
+        "eps_trend": [None] * EPS_TREND_YEARS,
+        "div_trend": [0.0] * DIV_TREND_YEARS,
+        "score": 0,
+        "grade": "D",
+        "score_details": [],
+        "is_value_trap": False,
+        "error": error,
+        "details": {
+            "roa": "-",
+            "roe": "-",
+            "gross_margin": "-",
+            "operating_margin": "-",
+            "profit_margin": "-",
+            "debt_to_equity": "-",
+            "current_ratio": "-",
+            "quick_ratio": "-",
+            "book_value": "-",
+            "price_to_book": "-",
+            "industry": "-",
+            "sector": "-",
+            "description": error
+        }
+    }
+
+def now_iso():
+    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+def parse_iso_datetime(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+def ensure_stocks_schema(conn):
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(stocks)").fetchall()}
+
+    if "is_manual" not in columns:
+        conn.execute("ALTER TABLE stocks ADD COLUMN is_manual INTEGER NOT NULL DEFAULT 0")
+    if "is_set100" not in columns:
+        conn.execute("ALTER TABLE stocks ADD COLUMN is_set100 INTEGER NOT NULL DEFAULT 0")
+
+    # Migrate legacy rows into manual list so user data is preserved.
+    conn.execute(
+        """
+        UPDATE stocks
+        SET is_manual = 1
+        WHERE COALESCE(is_manual, 0) = 0 AND COALESCE(is_set100, 0) = 0
+        """
+    )
+
+def ensure_sync_schema(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS set100_sync_status (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            last_synced_at TEXT,
+            last_success_at TEXT,
+            last_status TEXT,
+            last_message TEXT,
+            source_url TEXT,
+            total_symbols INTEGER NOT NULL DEFAULT 0,
+            added_count INTEGER NOT NULL DEFAULT 0,
+            removed_count INTEGER NOT NULL DEFAULT 0,
+            mode TEXT NOT NULL DEFAULT 'manual'
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO set100_sync_status (
+            id, last_status, last_message, source_url, total_symbols, added_count, removed_count, mode
+        ) VALUES (1, 'pending', 'ยังไม่เคยซิงก์ SET100', '', 0, 0, 0, 'manual')
+        """
+    )
+
+def get_set100_sync_status():
+    conn = get_db_connection()
+    try:
+        ensure_sync_schema(conn)
+        row = conn.execute("SELECT * FROM set100_sync_status WHERE id = 1").fetchone()
+        if not row:
+            return {
+                "last_synced_at": None,
+                "last_success_at": None,
+                "last_status": "pending",
+                "last_message": "ยังไม่เคยซิงก์ SET100",
+                "source_url": "",
+                "total_symbols": 0,
+                "added_count": 0,
+                "removed_count": 0,
+                "mode": "manual",
+            }
+        return dict(row)
+    finally:
+        conn.close()
+
+def save_set100_sync_status(status, commit=True):
+    conn = get_db_connection()
+    try:
+        ensure_sync_schema(conn)
+        conn.execute(
+            """
+            UPDATE set100_sync_status
+            SET last_synced_at = ?,
+                last_success_at = ?,
+                last_status = ?,
+                last_message = ?,
+                source_url = ?,
+                total_symbols = ?,
+                added_count = ?,
+                removed_count = ?,
+                mode = ?
+            WHERE id = 1
+            """,
+            (
+                status.get("last_synced_at"),
+                status.get("last_success_at"),
+                status.get("last_status"),
+                status.get("last_message"),
+                status.get("source_url", ""),
+                status.get("total_symbols", 0),
+                status.get("added_count", 0),
+                status.get("removed_count", 0),
+                status.get("mode", "manual"),
+            ),
+        )
+        if commit:
+            conn.commit()
+    finally:
+        conn.close()
+
+def fetch_set100_symbols():
+    session_client = requests.Session()
+    session_client.headers.update(REQUEST_HEADERS)
+
+    page_response = session_client.get(SET100_SOURCE_PAGE_URL, timeout=20)
+    page_response.raise_for_status()
+
+    api_response = session_client.get(
+        SET100_SOURCE_API_URL,
+        timeout=20,
+        headers={
+            "Referer": SET100_SOURCE_PAGE_URL,
+            "Accept": "application/json, text/plain, */*",
+            "X-Requested-With": "XMLHttpRequest",
+        },
+    )
+    api_response.raise_for_status()
+
+    payload = api_response.json()
+    stock_infos = payload.get("composition", {}).get("stockInfos", [])
+    symbols = []
+    for item in stock_infos:
+        raw_ticker = item.get("symbol")
+        ticker = normalize_ticker(raw_ticker)
+        if ticker:
+            ticker = SET100_TICKER_ALIASES.get(ticker, ticker)
+        if ticker:
+            symbols.append(ticker)
+
+    unique_symbols = sorted(set(symbols))
+    if len(unique_symbols) < SET100_MIN_EXPECTED_SYMBOLS:
+        raise RuntimeError(f"ดึงรายชื่อ SET100 ได้ไม่ครบ ({len(unique_symbols)} รายการ)")
+
+    return unique_symbols, SET100_SOURCE_API_URL
+
+def load_stock_records():
+    conn = get_db_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT symbol, is_manual, is_set100
+            FROM stocks
+            WHERE is_manual = 1 OR is_set100 = 1
+            ORDER BY symbol
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+def load_stock_flags():
+    return {
+        row["symbol"]: {
+            "is_manual": bool(row["is_manual"]),
+            "is_set100": bool(row["is_set100"]),
+        }
+        for row in load_stock_records()
+    }
+
+def get_thaifin_symbol(ticker):
+    return THAIFIN_TICKER_ALIASES.get(ticker, ticker)
+
+@lru_cache(maxsize=512)
+def get_eps_trend_from_thaifin(ticker, current_year):
+    years_eps = [current_year - EPS_TREND_YEARS + i for i in range(EPS_TREND_YEARS)]
+    eps_trend = [None] * EPS_TREND_YEARS
+
+    if not THAIFIN_AVAILABLE:
+        return tuple(years_eps), tuple(eps_trend)
+
+    try:
+        thaifin_stock = ThaiFinStock(get_thaifin_symbol(ticker))
+        yearly_df = thaifin_stock.yearly_dataframe
+        if yearly_df is None or yearly_df.empty or "earning_per_share" not in yearly_df.columns:
+            return tuple(years_eps), tuple(eps_trend)
+
+        yearly_eps = yearly_df["earning_per_share"].to_dict()
+        for idx, year in enumerate(years_eps):
+            period_value = yearly_eps.get(pd.Period(str(year), freq="Y"))
+            if pd.notna(period_value):
+                eps_trend[idx] = float(period_value)
+        return tuple(years_eps), tuple(eps_trend)
+    except Exception as exc:
+        app.logger.info("ThaiFin EPS fallback for %s: %s", ticker, exc)
+        return tuple(years_eps), tuple(eps_trend)
+
+def sync_set100_list(mode="manual"):
+    started_at = now_iso()
+    try:
+        symbols, source_url = fetch_set100_symbols()
+        conn = get_db_connection()
+        try:
+            existing_rows = conn.execute(
+                "SELECT symbol, is_set100 FROM stocks WHERE is_set100 = 1"
+            ).fetchall()
+            existing_set100 = {row["symbol"] for row in existing_rows}
+
+            new_set100 = set(symbols)
+            added_symbols = sorted(new_set100 - existing_set100)
+            removed_symbols = sorted(existing_set100 - new_set100)
+
+            for symbol in new_set100:
+                conn.execute(
+                    """
+                    INSERT INTO stocks (symbol, is_manual, is_set100)
+                    VALUES (?, 0, 1)
+                    ON CONFLICT(symbol) DO UPDATE SET is_set100 = 1
+                    """,
+                    (symbol,),
+                )
+
+            for symbol in removed_symbols:
+                conn.execute("UPDATE stocks SET is_set100 = 0 WHERE symbol = ?", (symbol,))
+
+            conn.execute(
+                "DELETE FROM stocks WHERE is_manual = 0 AND is_set100 = 0"
+            )
+
+            status = {
+                "last_synced_at": started_at,
+                "last_success_at": started_at,
+                "last_status": "success",
+                "last_message": f"ซิงก์ SET100 สำเร็จ ({len(symbols)} รายการ)",
+                "source_url": source_url,
+                "total_symbols": len(symbols),
+                "added_count": len(added_symbols),
+                "removed_count": len(removed_symbols),
+                "mode": mode,
+            }
+
+            ensure_sync_schema(conn)
+            conn.execute(
+                """
+                UPDATE set100_sync_status
+                SET last_synced_at = ?,
+                    last_success_at = ?,
+                    last_status = ?,
+                    last_message = ?,
+                    source_url = ?,
+                    total_symbols = ?,
+                    added_count = ?,
+                    removed_count = ?,
+                    mode = ?
+                WHERE id = 1
+                """,
+                (
+                    status["last_synced_at"],
+                    status["last_success_at"],
+                    status["last_status"],
+                    status["last_message"],
+                    status["source_url"],
+                    status["total_symbols"],
+                    status["added_count"],
+                    status["removed_count"],
+                    status["mode"],
+                ),
+            )
+            conn.commit()
+            return status
+        finally:
+            conn.close()
+    except Exception as exc:
+        app.logger.warning("SET100 sync failed: %s", exc)
+        current_status = get_set100_sync_status()
+        current_status.update(
+            {
+                "last_synced_at": started_at,
+                "last_status": "error",
+                "last_message": str(exc),
+                "mode": mode,
+            }
+        )
+        save_set100_sync_status(current_status)
+        raise
+
+def maybe_auto_sync_set100():
+    if request.method != "GET" or request.endpoint not in {"index", "api_data"}:
+        return
+
+    status = get_set100_sync_status()
+    last_success = parse_iso_datetime(status.get("last_success_at"))
+    if last_success and datetime.now(last_success.tzinfo) - last_success < timedelta(seconds=SET100_AUTO_SYNC_INTERVAL_SECONDS):
+        return
+
+    if getattr(app, "set100_auto_sync_running", False):
+        return
+
+    try:
+        app.set100_auto_sync_running = True
+        sync_set100_list(mode="auto")
+    except Exception:
+        pass
+    finally:
+        app.set100_auto_sync_running = False
 
 def init_db():
     # If on Vercel and DB not in /tmp, initialize it (copy from source or create new)
@@ -73,16 +499,21 @@ def init_db():
              shutil.copy2(DB_FILE, DB_PATH)
     
     # Only run init if we are creating a fresh DB
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     c = conn.cursor()
+    c.execute('PRAGMA busy_timeout = 30000')
+    c.execute('PRAGMA journal_mode = WAL')
     c.execute('''CREATE TABLE IF NOT EXISTS stocks
                  (symbol TEXT PRIMARY KEY)''')
 
     c.execute('''CREATE TABLE IF NOT EXISTS translations
                  (symbol TEXT PRIMARY KEY, description_th TEXT)''')
+    conn.row_factory = sqlite3.Row
+    ensure_stocks_schema(conn)
+    ensure_sync_schema(conn)
     
     # Check if empty
-    c.execute('SELECT count(*) FROM stocks')
+    c.execute('SELECT count(*) FROM stocks WHERE is_manual = 1 OR is_set100 = 1')
     count = c.fetchone()[0]
     
     if count == 0:
@@ -92,7 +523,8 @@ def init_db():
             try:
                 with open(STOCKS_FILE, 'r') as f:
                     initial_data = json.load(f)
-            except:
+            except Exception as exc:
+                app.logger.warning("Unable to read %s, using defaults: %s", STOCKS_FILE, exc)
                 initial_data = INITIAL_STOCKS
         else:
             initial_data = INITIAL_STOCKS
@@ -100,7 +532,10 @@ def init_db():
         # Bulk insert
         # Ensure unique
         unique_stocks = list(set(initial_data))
-        c.executemany('INSERT OR IGNORE INTO stocks (symbol) VALUES (?)', [(s,) for s in unique_stocks])
+        c.executemany(
+            'INSERT OR IGNORE INTO stocks (symbol, is_set100) VALUES (?, 1)',
+            [(s,) for s in unique_stocks]
+        )
         conn.commit()
         print(f"Initialized DB with {len(unique_stocks)} stocks.")
         
@@ -110,54 +545,72 @@ def init_db():
 # Use before_request to avoid cold start timeouts
 @app.before_request
 def initialize():
+    get_csrf_token()
     if not getattr(app, 'db_initialized', False):
         try:
             init_db()
             app.db_initialized = True
         except Exception as e:
             print(f"DB Init Error: {e}")
+    maybe_auto_sync_set100()
 
 @app.route('/health')
 def health_check():
-    return jsonify({"status": "ok", "vercel": IS_VERCEL})
+    sync_status = get_set100_sync_status()
+    return jsonify({"status": "ok", "vercel": IS_VERCEL, "set100_sync": sync_status})
 
 def load_stocks():
-    # Helper to get connection based on environment
-    conn = get_db_connection()
-    try:
-        stocks = conn.execute('SELECT symbol FROM stocks ORDER BY symbol').fetchall()
-    except Exception:
-        return []
-    conn.close()
-    return [s['symbol'] for s in stocks]
+    return [row["symbol"] for row in load_stock_records()]
 
 def add_stock_db(symbol):
     conn = get_db_connection()
     try:
-        conn.execute('INSERT OR IGNORE INTO stocks (symbol) VALUES (?)', (symbol,))
+        cursor = conn.execute(
+            """
+            INSERT INTO stocks (symbol, is_manual, is_set100)
+            VALUES (?, 1, 0)
+            ON CONFLICT(symbol) DO UPDATE SET is_manual = 1
+            """,
+            (symbol,),
+        )
         conn.commit()
-    except:
-        pass
+        return cursor.rowcount > 0
+    except sqlite3.Error as exc:
+        app.logger.warning("Unable to add stock %s: %s", symbol, exc)
+        return False
     finally:
         conn.close()
 
 def remove_stock_db(symbol):
     conn = get_db_connection()
     try:
-        conn.execute('DELETE FROM stocks WHERE symbol = ?', (symbol,))
+        cursor = conn.execute(
+            """
+            UPDATE stocks
+            SET is_manual = 0
+            WHERE symbol = ? AND is_manual = 1
+            """,
+            (symbol,),
+        )
+        conn.execute('DELETE FROM stocks WHERE symbol = ? AND is_manual = 0 AND is_set100 = 0', (symbol,))
         conn.commit()
-    except:
-        pass
+        return cursor.rowcount > 0
+    except sqlite3.Error as exc:
+        app.logger.warning("Unable to remove stock %s: %s", symbol, exc)
+        return False
     finally:
         conn.close()
 
 def clear_all_stocks_db():
     conn = get_db_connection()
     try:
-        conn.execute('DELETE FROM stocks')
+        conn.execute('UPDATE stocks SET is_manual = 0 WHERE is_manual = 1')
+        conn.execute('DELETE FROM stocks WHERE is_manual = 0 AND is_set100 = 0')
         conn.commit()
-    except:
-        pass
+        return True
+    except sqlite3.Error as exc:
+        app.logger.warning("Unable to clear all stocks: %s", exc)
+        return False
     finally:
         conn.close()
 
@@ -167,8 +620,8 @@ def get_translation_db(symbol):
         row = conn.execute('SELECT description_th FROM translations WHERE symbol = ?', (symbol,)).fetchone()
         if row:
             return row['description_th']
-    except:
-        pass
+    except sqlite3.Error as exc:
+        app.logger.warning("Unable to load translation cache for %s: %s", symbol, exc)
     finally:
         conn.close()
     return None
@@ -178,13 +631,16 @@ def save_translation_db(symbol, text):
     try:
         conn.execute('INSERT OR REPLACE INTO translations (symbol, description_th) VALUES (?, ?)', (symbol, text))
         conn.commit()
-    except:
-        pass
+    except sqlite3.Error as exc:
+        app.logger.warning("Unable to save translation cache for %s: %s", symbol, exc)
     finally:
         conn.close()
 
 def get_stock_data(ticker):
     try:
+        if not normalize_ticker(ticker):
+            return build_empty_stock_payload(ticker, "Invalid ticker")
+
         # Append .BK for Thai stocks if not present, assuming mostly SET stocks
         symbol = ticker if "." in ticker else f"{ticker}.BK"
         stock = yf.Ticker(symbol)
@@ -204,44 +660,36 @@ def get_stock_data(ticker):
             except:
                 return default
 
-        # Fetch Historical Data (Trend 5Y EPS & 10Y Dividends)
+        # Fetch Historical Data (Trend 10Y EPS & 10Y Dividends)
         eps_trend = []
         div_trend = []
         import datetime
         current_year = datetime.datetime.now().year
         
         try:
-            # EPS Trend (Last 5 Years, ending at current_year - 1 i.e., 2025)
-            # Since user indicated 2026 is too early and 2025 is the latest (even if partial)
-            financials = stock.financials
-            eps_trend = [None] * 5 
-            # 2021, 2022, 2023, 2024, 2025
-            years_eps = [current_year - 5, current_year - 4, current_year - 3, current_year - 2, current_year - 1]
-            
-            if "Basic EPS" in financials.index:
-                eps_series = financials.loc["Basic EPS"]
-                # Convert to dict for easy lookup {year: value}
-                eps_dict = {d.year: float(v) for d, v in eps_series.items() if not pd.isna(v)}
-                
-                # Fill aligned list
-                eps_trend = []
-                for y in years_eps:
-                    val = eps_dict.get(y)
-                    
-                    # Fallback strategies for missing data
-                    if val is None:
-                        # If 2025 (current_year - 1) is missing, try Trailing EPS (TTM)
-                        if y == current_year - 1:
+            years_eps, eps_trend = get_eps_trend_from_thaifin(ticker, current_year)
+
+            if not any(val is not None for val in eps_trend):
+                financials = stock.financials
+                eps_trend = [None] * EPS_TREND_YEARS
+
+                if "Basic EPS" in financials.index:
+                    eps_series = financials.loc["Basic EPS"]
+                    eps_dict = {d.year: float(v) for d, v in eps_series.items() if not pd.isna(v)}
+
+                    eps_trend = []
+                    for y in years_eps:
+                        val = eps_dict.get(y)
+                        if val is None and y == current_year - 1:
                             val = get_val("trailingEps", None)
-                            if val == "-": val = None
-                            
-                    eps_trend.append(val) 
-            else:
-                # If no financials, try to fill with TTM for 2025
-                eps_trend = [None] * 5
-                # Try 2025
-                t_eps = get_val("trailingEps", None)
-                if t_eps != "-": eps_trend[4] = t_eps # 2025
+                            if val == "-":
+                                val = None
+                        eps_trend.append(val)
+                else:
+                    eps_trend = [None] * EPS_TREND_YEARS
+                    t_eps = get_val("trailingEps", None)
+                    if t_eps != "-":
+                        eps_trend[-1] = t_eps
             
             # Dividend Trend (Last 10 Years, ending at 2025)
             dividends = stock.dividends
@@ -258,7 +706,7 @@ def get_stock_data(ticker):
                 
                 # Prepare div_trend for chart (Last 10 years ending at current_year - 1)
                 div_trend = []
-                start_year = current_year - 10 # 2016 to 2025
+                start_year = current_year - DIV_TREND_YEARS
                 for y in range(start_year, current_year):
                     val = div_dict.get(y, 0.0)
                     div_trend.append(float(val))
@@ -550,7 +998,7 @@ def get_stock_data(ticker):
 
         # A: 7-10, B: 5-6, C: 3-4, D: 0-2
         grade = "D"
-        if score >= 7: grade = "A"
+        if score >= GRADE_A_MIN_SCORE: grade = "A"
         elif score >= 5: grade = "B"
         elif score >= 3: grade = "C"
         
@@ -596,6 +1044,7 @@ def get_stock_data(ticker):
             "ddm_k": k_percent,
             "graham_number": graham_number,
             "lynch_value": lynch_value,
+            "fair_value": round(fair_value, 2) if fair_value != "-" and fair_value > 0 else "-",
             "peg": round(peg, 2) if peg != "-" else "-",
             "target_price": get_val("targetMeanPrice", "-"),
             "rsi": rsi,
@@ -612,6 +1061,7 @@ def get_stock_data(ticker):
             "grade": grade,
             "score_details": score_details,
             "is_value_trap": is_value_trap,
+            "error": None,
             "details": {
                 "roa": get_float("returnOnAssets", 100),
                 "roe": get_float("returnOnEquity", 100),
@@ -630,56 +1080,117 @@ def get_stock_data(ticker):
         }
     except Exception as e:
         print(f"Error fetching {ticker}: {e}")
-        return {
-            "symbol": ticker,
-            "error": "Data Unavailable"
-        }
+        return build_empty_stock_payload(ticker, "Data Unavailable")
 
 @app.route('/')
 def index():
-    stocks = load_stocks()
-    return render_template('index.html', stocks=stocks)
+    stocks = load_stock_records()
+    sync_status = get_set100_sync_status()
+    return render_template(
+        'index.html',
+        stocks=stocks,
+        sync_status=sync_status,
+        csrf_token=get_csrf_token(),
+        grade_a_min_score=GRADE_A_MIN_SCORE,
+        sniper_min_mos=SNIPER_MIN_MOS,
+        status_message=request.args.get('message'),
+        status_level=request.args.get('level', 'success')
+    )
 
 @app.route('/api/stocks')
 def api_stocks():
-    stocks = load_stocks()
+    stocks = load_stock_records()
     return jsonify(stocks)
 
 @app.route('/api/data')
 def api_data():
-    stocks = load_stocks()
+    stock_records = load_stock_records()
+    stocks = [row["symbol"] for row in stock_records]
+    stock_flags = {row["symbol"]: row for row in stock_records}
     results = []
     
     # Use ThreadPool for faster fetching
-    with ThreadPoolExecutor(max_workers=30) as executor:
+    max_workers = max(1, min(API_MAX_WORKERS, len(stocks) or 1))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = list(executor.map(get_stock_data, stocks))
+
+    for item in results:
+        flags = stock_flags.get(item.get("symbol"), {})
+        item["is_manual"] = bool(flags.get("is_manual", 0))
+        item["is_set100"] = bool(flags.get("is_set100", 0))
+        if item["is_manual"] and item["is_set100"]:
+            item["source"] = "both"
+        elif item["is_set100"]:
+            item["source"] = "set100"
+        elif item["is_manual"]:
+            item["source"] = "manual"
+        else:
+            item["source"] = "unknown"
         
     return jsonify(results)
 
 @app.route('/add', methods=['POST'])
 def add_stock():
-    raw_input = request.form.get('ticker')
-    if raw_input:
-        # Normalize: Replace newlines and commas with space, then split
-        import re
-        tickers = re.split(r'[,\s\n]+', raw_input)
-        
-        for t in tickers:
-            clean_ticker = t.upper().strip()
-            if clean_ticker:
-                add_stock_db(clean_ticker)
-            
-    return redirect(url_for('index'))
+    if not is_valid_csrf_token():
+        return build_redirect('คำขอไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง', 'danger')
 
-@app.route('/remove/<ticker>')
+    raw_input = request.form.get('ticker')
+    if not raw_input:
+        return build_redirect('กรุณากรอกรายชื่อหุ้นที่ต้องการเพิ่ม', 'warning')
+
+    tickers, invalid_tickers = parse_tickers(raw_input)
+    if not tickers:
+        return build_redirect('ไม่พบรหัสหุ้นที่ถูกต้อง', 'warning')
+
+    added_count = 0
+    for ticker in tickers:
+        if add_stock_db(ticker):
+            added_count += 1
+
+    if invalid_tickers:
+        app.logger.info("Ignored invalid tickers: %s", ", ".join(invalid_tickers))
+
+    message = f'บันทึกรายชื่อหุ้น {added_count} รายการ'
+    if invalid_tickers:
+        message += f' และข้ามข้อมูลที่ไม่ถูกต้อง {len(invalid_tickers)} รายการ'
+    return build_redirect(message, 'success')
+
+@app.route('/remove/<ticker>', methods=['POST'])
 def remove_stock(ticker):
-    remove_stock_db(ticker)
-    return redirect(url_for('index'))
+    if not is_valid_csrf_token():
+        return build_redirect('คำขอไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง', 'danger')
+
+    clean_ticker = normalize_ticker(ticker)
+    if not clean_ticker:
+        return build_redirect('รหัสหุ้นไม่ถูกต้อง', 'warning')
+
+    if remove_stock_db(clean_ticker):
+        return build_redirect(f'ลบหุ้น {clean_ticker} ออกจากรายการส่วนตัวเรียบร้อยแล้ว', 'success')
+    return build_redirect(f'ไม่พบหุ้น {clean_ticker} ในรายการส่วนตัว', 'warning')
 
 @app.route('/clear_all', methods=['POST'])
 def clear_all_stocks():
-    clear_all_stocks_db()
-    return redirect(url_for('index'))
+    if not is_valid_csrf_token():
+        return build_redirect('คำขอไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง', 'danger')
+
+    if clear_all_stocks_db():
+        return build_redirect('ลบรายชื่อหุ้นที่เพิ่มเองทั้งหมดเรียบร้อยแล้ว', 'success')
+    return build_redirect('ไม่สามารถลบรายชื่อหุ้นทั้งหมดได้', 'danger')
+
+@app.route('/sync_set100', methods=['POST'])
+def sync_set100():
+    if not is_valid_csrf_token():
+        return build_redirect('คำขอไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง', 'danger')
+
+    try:
+        status = sync_set100_list(mode="manual")
+        message = (
+            f"ซิงก์ SET100 สำเร็จ {status['total_symbols']} รายการ "
+            f"(เพิ่ม {status['added_count']} / เอาออก {status['removed_count']})"
+        )
+        return build_redirect(message, 'success')
+    except Exception as exc:
+        return build_redirect(f'ซิงก์ SET100 ไม่สำเร็จ: {exc}', 'danger')
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
