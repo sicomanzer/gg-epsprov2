@@ -3,6 +3,7 @@ from datetime import datetime
 from functools import lru_cache
 
 import pandas as pd
+import requests
 import yfinance as yf
 
 from .. import config
@@ -14,6 +15,21 @@ try:
 except Exception:
     ThaiFinStock = None
     THAIFIN_AVAILABLE = False
+
+
+FINNOMENA_BASE_URL = "https://www.finnomena.com/market-info/api/public"
+
+
+def _log_warning(message, exc=None):
+    try:
+        from flask import current_app
+
+        if exc is not None:
+            current_app.logger.warning("%s: %s", message, exc)
+        else:
+            current_app.logger.warning("%s", message)
+    except Exception:
+        return
 
 
 def normalize_ticker(raw_ticker):
@@ -97,10 +113,77 @@ def get_thaifin_symbol(ticker):
     return config.THAIFIN_TICKER_ALIASES.get(ticker, ticker)
 
 
+@lru_cache(maxsize=2)
+def _get_finnomena_security_id_map(cache_day):
+    response = requests.get(
+        f"{FINNOMENA_BASE_URL}/stock/list",
+        params={"exchange": "TH"},
+        headers=config.REQUEST_HEADERS,
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    items = payload.get("data") or []
+    mapping = {}
+    for item in items:
+        name = item.get("name")
+        security_id = item.get("security_id")
+        if name and security_id:
+            mapping[str(name).upper()] = str(security_id)
+    return mapping
+
+
+@lru_cache(maxsize=4096)
+def _get_finnomena_yearly_eps(security_id, cache_day):
+    response = requests.get(
+        f"{FINNOMENA_BASE_URL}/stock/summary/{security_id}",
+        headers=config.REQUEST_HEADERS,
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    rows = payload.get("data") or []
+    yearly = {}
+    for row in rows:
+        if row.get("quarter") != 9:
+            continue
+        fiscal = row.get("fiscal")
+        if fiscal is None:
+            continue
+        try:
+            year = int(fiscal)
+        except Exception:
+            continue
+        value = row.get("earning_per_share")
+        if value is None:
+            yearly[year] = None
+            continue
+        try:
+            yearly[year] = float(value)
+        except Exception:
+            yearly[year] = None
+    return yearly
+
+
 @lru_cache(maxsize=512)
 def get_eps_trend_from_thaifin(ticker, current_year):
     years_eps = [current_year - config.EPS_TREND_YEARS + i for i in range(config.EPS_TREND_YEARS)]
     eps_trend = [None] * config.EPS_TREND_YEARS
+
+    cache_day = datetime.utcnow().strftime("%Y%m%d")
+    try:
+        mapping = _get_finnomena_security_id_map(cache_day)
+        security_id = mapping.get(get_thaifin_symbol(ticker).upper()) or mapping.get(str(ticker).upper())
+        if security_id:
+            yearly_eps = _get_finnomena_yearly_eps(security_id, cache_day)
+            for idx, year in enumerate(years_eps):
+                value = yearly_eps.get(year)
+                if value is not None:
+                    eps_trend[idx] = float(value)
+            if any(val is not None for val in eps_trend):
+                return tuple(years_eps), tuple(eps_trend)
+    except Exception as exc:
+        _log_warning("Finnomena EPS trend failed", exc)
 
     if not THAIFIN_AVAILABLE:
         return tuple(years_eps), tuple(eps_trend)
@@ -117,7 +200,8 @@ def get_eps_trend_from_thaifin(ticker, current_year):
             if pd.notna(period_value):
                 eps_trend[idx] = float(period_value)
         return tuple(years_eps), tuple(eps_trend)
-    except Exception:
+    except Exception as exc:
+        _log_warning("ThaiFin EPS trend failed", exc)
         return tuple(years_eps), tuple(eps_trend)
 
 
