@@ -740,7 +740,21 @@
                 $('#modal-sector').text(stock.details.sector);
                 $('#modal-industry').text(stock.details.industry);
                 $('#modal-price').text(formatNumber(stock.price));
-                $('#modal-desc').text(stock.details.description);
+                $('#modal-desc').text('กำลังโหลดข้อมูล...');
+                $.ajax({
+                    url: '/api/description/' + encodeURIComponent(stock.symbol),
+                    method: 'GET',
+                    success: function(payload) {
+                        if (payload && payload.description) {
+                            $('#modal-desc').text(payload.description);
+                        } else {
+                            $('#modal-desc').text('-');
+                        }
+                    },
+                    error: function() {
+                        $('#modal-desc').text('-');
+                    }
+                });
 
                 // Populate Financial Ratios (Dynamic List)
                 let ratios = [
