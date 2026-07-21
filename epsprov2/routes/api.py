@@ -1,20 +1,71 @@
+import os
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, current_app, jsonify
 
 from ..db import get_set100_sync_status, load_stock_records
-from ..services.stock_data import get_stock_data
+from ..services.stock_data import get_eps_cache_diagnostics, get_stock_data
 from ..services.translation import get_description_th
 
 
 api_bp = Blueprint("api", __name__)
 
 
+def get_build_info():
+    commit_sha = (
+        os.environ.get("VERCEL_GIT_COMMIT_SHA")
+        or os.environ.get("GIT_COMMIT_SHA")
+        or os.environ.get("COMMIT_SHA")
+    )
+    branch = (
+        os.environ.get("VERCEL_GIT_COMMIT_REF")
+        or os.environ.get("GIT_BRANCH")
+        or os.environ.get("BRANCH")
+    )
+
+    if not commit_sha:
+        try:
+            commit_sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")),
+                text=True,
+            ).strip()
+        except Exception:
+            commit_sha = None
+
+    if not branch:
+        try:
+            branch = subprocess.check_output(
+                ["git", "branch", "--show-current"],
+                cwd=os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")),
+                text=True,
+            ).strip()
+        except Exception:
+            branch = None
+
+    return {
+        "commit_sha": commit_sha,
+        "commit_short": commit_sha[:7] if commit_sha else None,
+        "branch": branch,
+        "vercel_region": os.environ.get("VERCEL_REGION"),
+        "vercel_url": os.environ.get("VERCEL_URL"),
+    }
+
+
 @api_bp.route("/health")
 def health_check():
     sync_status = get_set100_sync_status()
+    build_info = get_build_info()
+    eps_cache = get_eps_cache_diagnostics()
     return jsonify(
-        {"status": "ok", "vercel": bool(current_app.config.get("IS_VERCEL")), "set100_sync": sync_status}
+        {
+            "status": "ok",
+            "vercel": bool(current_app.config.get("IS_VERCEL")),
+            "set100_sync": sync_status,
+            "build": build_info,
+            "eps_cache": eps_cache,
+        }
     )
 
 

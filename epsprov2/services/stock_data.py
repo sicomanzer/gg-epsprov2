@@ -45,6 +45,29 @@ def _load_packaged_eps_cache():
         return {}
 
 
+def get_eps_cache_diagnostics(sample_symbols=None, current_year=None):
+    cache = _load_packaged_eps_cache()
+    if current_year is None:
+        current_year = datetime.now().year
+    years_eps = [current_year - config.EPS_TREND_YEARS + i for i in range(config.EPS_TREND_YEARS)]
+    sample_symbols = sample_symbols or ["AAV", "PTT", "KBANK"]
+
+    samples = {}
+    for symbol in sample_symbols:
+        series = _build_eps_series_from_year_map(symbol, years_eps)
+        samples[symbol] = {
+            "non_null_years": sum(value is not None for value in series),
+            "series": series,
+        }
+
+    return {
+        "file_path": EPS_CACHE_FILE,
+        "file_exists": os.path.exists(EPS_CACHE_FILE),
+        "symbol_count": len(cache),
+        "sample_symbols": samples,
+    }
+
+
 def normalize_ticker(raw_ticker):
     if not raw_ticker:
         return None
