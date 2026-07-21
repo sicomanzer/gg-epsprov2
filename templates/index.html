@@ -107,9 +107,9 @@
         </div>
 
         <!-- Top 5 Recommended Stocks Section -->
-        <div class="card mb-4 border-0 shadow-sm" style="background: linear-gradient(90deg, #198754 0%, #20c997 100%);">
+            <div class="card mb-4 border-0 shadow-sm" style="background: linear-gradient(90deg, #198754 0%, #20c997 100%);">
             <div class="card-header border-0 bg-transparent text-white pt-3 pb-0">
-                <h5 class="fw-bold"><i class="bi bi-trophy-fill text-warning"></i> 5 อันดับหุ้นน่าลงทุน (Grade A) แนะนำโดยระบบ</h5>
+                <h5 class="fw-bold"><i class="bi bi-trophy-fill text-warning"></i> 5 อันดับหุ้นปันผลน่าลงทุน (Dividend Score v2)</h5>
             </div>
             <div class="card-body">
                 <div class="row g-3" id="top-stocks-container">
@@ -177,6 +177,7 @@
             <div class="d-flex flex-wrap gap-2 mb-3">
                  <button id="filterGrowthBtn" class="btn btn-primary shadow-sm"><i class="bi bi-graph-up"></i> คัดกรองหุ้นเติบโต</button>
                  <button id="filterDivGrowthBtn" class="btn btn-info shadow-sm text-white"><i class="bi bi-piggy-bank"></i> คัดหุ้นปันผลเติบโต (10Y)</button>
+                 <button id="filterDividendSafeBtn" class="btn btn-dark shadow-sm"><i class="bi bi-shield-check"></i> หุ้นปันผลปลอดภัย</button>
                  <button id="filterUndervaluedBtn" class="btn btn-warning shadow-sm"><i class="bi bi-currency-dollar"></i> คัดราคา < Fair Value</button>
                  <button id="filterGradeABtn" class="btn btn-success shadow-sm" title="คัดหุ้นเกรด A (Score >= {{ grade_a_min_score }})"><i class="bi bi-star-fill"></i> คัดหุ้นเกรด A (Guru)</button>
                  <button id="filterSniperBtn" class="btn btn-danger shadow-sm" title="Grade A + MOS > {{ sniper_min_mos }}% + RSI < 50"><i class="bi bi-crosshair"></i> Sniper Mode (Superhuman)</button>
@@ -217,6 +218,10 @@
                             <th>BVPS</th>
                             <th>รายได้โต (%)</th>
                             <th>กำไรโต (%)</th>
+                            <th>Dividend Score</th>
+                            <th>Payout (%)</th>
+                            <th>Div CAGR 5Y (%)</th>
+                            <th>Cut Count</th>
                             <th>Score</th>
                             <th>จัดการ</th>
                         </tr>
@@ -523,43 +528,29 @@
             function renderTopStocks() {
                 if (!stocksData || stocksData.length === 0) return;
 
-                // Sort logic: Score (desc) -> MOS (desc) -> Price (asc)
-                // Filter out bad stocks first (Quality Filter)
                 let candidates = stocksData.filter(stock => {
-                    // Exclude if Earnings Growth is negative (Declining business)
-                    // stock.ebitda_growth is derived from 'earningsGrowth' in backend
                     let eg = parseFloat(stock.ebitda_growth);
                     if (!isNaN(eg) && eg < 0) return false;
-                    
-                    // Exclude if Net Margin is negative (Losing money)
+
                     let nm = parseFloat(stock.details.profit_margin);
                     if (!isNaN(nm) && nm < 0) return false;
-                    
-                    // Exclude if Dividend Yield is missing or 0 (User prefers dividend stocks usually)
-                    // Optional: let's be strict for Top 5
+
                     let dy = parseFloat(stock.dividend_yield);
                     if (isNaN(dy) || dy <= 0) return false;
-                    
-                    // Exclude small caps? (e.g. Market Cap < 1B)
-                    // market_cap is in raw units
+
                     let mc = parseFloat(stock.market_cap);
                     if (!isNaN(mc) && mc < 1000000000) return false;
-                    
-                    // --- Sustainability Filter (Consistency Check) ---
-                    // 1. Dividend Consistency: Must pay in at least 3 of last 5 years
-                    // div_trend is 10 years (2016-2025). Last 5 years are index 5,6,7,8,9
+
                     if (stock.div_trend && stock.div_trend.length >= 10) {
-                        let recent5Y = stock.div_trend.slice(5); // Last 5 years
+                        let recent5Y = stock.div_trend.slice(5);
                         let payingYears = recent5Y.filter(d => d > 0).length;
                         if (payingYears < 3) return false;
                     }
-                    
-                    // 2. EPS Consistency: Must not have negative EPS in last 2 years
+
                     if (stock.eps_trend && stock.eps_trend.length >= 2) {
                         let len = stock.eps_trend.length;
                         let lastYearEPS = stock.eps_trend[len - 1];
                         let prevYearEPS = stock.eps_trend[len - 2];
-                        // If any of the last 2 years is negative, exclude (Turnaround is risky)
                         if ((lastYearEPS !== null && lastYearEPS < 0) || (prevYearEPS !== null && prevYearEPS < 0)) {
                             return false;
                         }
@@ -567,25 +558,30 @@
 
                     return true;
                 });
-                
-                // If candidates are too few, fallback to original list but warn?
-                // Or just use original sorted list if empty
+
                 let sourceList = candidates.length >= 5 ? candidates : stocksData;
 
                 let sorted = [...sourceList].sort((a, b) => {
-                    let scoreA = a.score || 0;
-                    let scoreB = b.score || 0;
+                    let scoreA = safeNumber(a.dividend_score) ?? 0;
+                    let scoreB = safeNumber(b.dividend_score) ?? 0;
                     if (scoreB !== scoreA) return scoreB - scoreA;
-                    
+
+                    let safetyA = safeNumber(a.dividend_safety_score) ?? 0;
+                    let safetyB = safeNumber(b.dividend_safety_score) ?? 0;
+                    if (safetyB !== safetyA) return safetyB - safetyA;
+
+                    let yieldA = safeNumber(a.dividend_yield) ?? -999;
+                    let yieldB = safeNumber(b.dividend_yield) ?? -999;
+                    if (yieldB !== yieldA) return yieldB - yieldA;
+
                     let mosA = parseFloat(a.mos) || -999;
                     let mosB = parseFloat(b.mos) || -999;
                     if (mosB !== mosA) return mosB - mosA;
-                    
+
                     return 0;
                 });
 
-                let top5 = sorted.slice(0, 5); // Take top 5
-                
+                let top5 = sorted.slice(0, 5);
                 let container = $('#top-stocks-container');
                 container.empty();
 
@@ -603,6 +599,10 @@
                     
                     const safeSymbol = escapeHtml(stock.symbol);
                     const safeName = escapeHtml(stock.name);
+                    const dividendGrade = escapeHtml(stock.dividend_grade || "D");
+                    const dividendScore = formatNumber(stock.dividend_score, 1);
+                    const safetyScore = formatNumber(stock.dividend_safety_score, 0);
+                    const payoutRatio = formatNumber(stock.payout_ratio);
                     let cardHtml = `
                     <div class="col-12 col-md-4 col-lg-2 flex-grow-1">
                         <div class="card h-100 border-0 shadow-sm" style="min-width: 200px;">
@@ -613,25 +613,40 @@
                                             <i class="bi bi-award-fill text-warning"></i> ${safeSymbol}
                                         </h5>
                                         <small class="text-muted text-truncate d-block" style="max-width: 120px;" title="${safeName}">${safeName}</small>
+                                        <span class="badge bg-success-subtle text-success border mt-1">Div Grade ${dividendGrade}</span>
                                     </div>
                                     <div class="text-end">
                                         <h5 class="fw-bold mb-0">฿${formatNumber(stock.price)}</h5>
-                                        <span class="badge bg-success rounded-pill" style="font-size: 0.7rem;">Score: ${stock.score}/10</span>
+                                        <span class="badge bg-success rounded-pill" style="font-size: 0.7rem;">Div Score: ${dividendScore}/10</span>
                                     </div>
                                 </div>
                                 <hr class="my-2 opacity-25">
                                 <div class="row g-0 text-center small">
-                                    <div class="col-4 border-end">
+                                    <div class="col-3 border-end">
                                         <div class="text-muted" style="font-size:0.7rem;">P/E</div>
                                         <div class="fw-bold">${formatNumber(stock.pe_trailing)}</div>
                                     </div>
-                                    <div class="col-4 border-end">
+                                    <div class="col-3 border-end">
                                         <div class="text-muted" style="font-size:0.7rem;">MOS</div>
                                         <div class="${mosClass}">${mosSign}${formatNumber(stock.mos)}%</div>
                                     </div>
-                                    <div class="col-4">
+                                    <div class="col-3 border-end">
                                         <div class="text-muted" style="font-size:0.7rem;">Yield</div>
                                         <div class="fw-bold text-success">${formatNumber(stock.dividend_yield)}%</div>
+                                    </div>
+                                    <div class="col-3">
+                                        <div class="text-muted" style="font-size:0.7rem;">Safety</div>
+                                        <div class="fw-bold">${safetyScore}/10</div>
+                                    </div>
+                                </div>
+                                <div class="row g-0 text-center small mt-2 pt-2 border-top">
+                                    <div class="col-6 border-end">
+                                        <div class="text-muted" style="font-size:0.7rem;">Payout</div>
+                                        <div class="fw-bold">${payoutRatio}%</div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="text-muted" style="font-size:0.7rem;">Safe Dividend</div>
+                                        <div class="${stock.is_dividend_safe ? 'text-success fw-bold' : 'text-muted'}">${stock.is_dividend_safe ? 'ใช่' : 'เฝ้าดู'}</div>
                                     </div>
                                 </div>
                             </div>
@@ -766,6 +781,12 @@
                     { label: "D/E Ratio", value: stock.details.debt_to_equity, is_percent: false },
                     { label: "อัตราปันผลตอบแทน", value: stock.dividend_yield, is_percent: true },
                     { label: "เงินปันผล (บาท/หุ้น)", value: stock.dividend_rate, is_percent: false },
+                    { label: "Payout Ratio", value: stock.details.payout_ratio, is_percent: true },
+                    { label: "Dividend CAGR 5Y", value: stock.details.dividend_cagr_5y, is_percent: true },
+                    { label: "Dividend CAGR 10Y", value: stock.details.dividend_cagr_10y, is_percent: true },
+                    { label: "Dividend Cut Count 10Y", value: stock.details.dividend_cut_count_10y, is_percent: false, decimals: 0 },
+                    { label: "Dividend Safety Score", value: stock.details.dividend_safety_score, is_percent: false, decimals: 0 },
+                    { label: "Dividend Score", value: stock.dividend_score, is_percent: false, decimals: 1 },
                     { label: "ราคาเป้าหมาย", value: stock.target_price, is_percent: false },
                     { label: "PEG Ratio", value: stock.peg, is_percent: false },
                     { label: "มูลค่า DDM", value: stock.ddm_value, is_percent: false },
@@ -794,18 +815,15 @@
                     if (r.is_mcap) {
                          val = formatNumber(val);
                     } else if (r.is_percent) {
-                         // All these are now guaranteed to be in Percentage Scale
                          let raw = parseFloat(r.value);
                          if (!isNaN(raw)) {
-                             val = formatNumber(raw) + "%";
+                             val = formatNumber(raw, r.decimals ?? 2) + "%";
                          } else {
                              val = "-";
                          }
                     } else {
-                         val = formatNumber(r.value);
+                         val = formatNumber(r.value, r.decimals ?? 2);
                     }
-                    // Dividend Yield handled above
-                    // if (r.label === "Dividend Yield" && val !== "-") val += "%";
 
                     ratioHtml += `
                         <div class="col-6 col-md-3">
@@ -1069,6 +1087,43 @@
                 resetOtherButtons('divGrowth');
             }
 
+            function filterDividendSafeStocks() {
+                if (!stocksData || stocksData.length === 0) return;
+
+                let dividendSafeStocks = [...stocksData]
+                    .filter(stock => stock.is_dividend_safe)
+                    .sort((a, b) => {
+                        let scoreA = safeNumber(a.dividend_score) ?? 0;
+                        let scoreB = safeNumber(b.dividend_score) ?? 0;
+                        if (scoreB !== scoreA) return scoreB - scoreA;
+
+                        let safetyA = safeNumber(a.dividend_safety_score) ?? 0;
+                        let safetyB = safeNumber(b.dividend_safety_score) ?? 0;
+                        if (safetyB !== safetyA) return safetyB - safetyA;
+
+                        let yieldA = safeNumber(a.dividend_yield) ?? -999;
+                        let yieldB = safeNumber(b.dividend_yield) ?? -999;
+                        return yieldB - yieldA;
+                    });
+
+                if (dividendSafeStocks.length === 0) {
+                    alert("ไม่พบหุ้นที่ผ่านเกณฑ์ปันผลปลอดภัยในรายการปัจจุบัน");
+                    return;
+                }
+
+                table.clear();
+                dividendSafeStocks.forEach(function(stock, index) {
+                    addStockRow(stock, index);
+                });
+                table.draw();
+
+                $('#filterDividendSafeBtn').html('<i class="bi bi-list-ul"></i> แสดงทั้งหมด');
+                $('#filterDividendSafeBtn').removeClass('btn-dark').addClass('btn-secondary');
+                $('#filterDividendSafeBtn').off('click').click(resetFilter);
+
+                resetOtherButtons('dividendSafe');
+            }
+
             // Filter Undervalued Stocks Function (Price < Fair Value)
             function filterUndervaluedStocks() {
                 if (!stocksData || stocksData.length === 0) return;
@@ -1236,6 +1291,13 @@
                          $('#filterDivGrowthBtn').off('click').click(filterDivGrowthStocks);
                      }
                 }
+                if (activeFilter !== 'dividendSafe') {
+                     if ($('#filterDividendSafeBtn').hasClass('btn-secondary')) {
+                         $('#filterDividendSafeBtn').html('<i class="bi bi-shield-check"></i> หุ้นปันผลปลอดภัย');
+                         $('#filterDividendSafeBtn').removeClass('btn-secondary').addClass('btn-dark');
+                         $('#filterDividendSafeBtn').off('click').click(filterDividendSafeStocks);
+                     }
+                }
                 if (activeFilter !== 'undervalued') {
                      if ($('#filterUndervaluedBtn').hasClass('btn-secondary')) {
                         $('#filterUndervaluedBtn').html('<i class="bi bi-currency-dollar"></i> คัดราคา < Fair Value');
@@ -1324,6 +1386,12 @@
                 let high52 = formatNumber(stock.high_52);
                 let low52 = formatNumber(stock.low_52);
                 let bvps = formatNumber(stock.bvps);
+                let dividendScore = stock.dividend_score !== undefined ? formatNumber(stock.dividend_score, 1) : "-";
+                let payoutRatio = formatNumber(stock.payout_ratio);
+                let dividendCagr5y = formatNumber(stock.dividend_cagr_5y);
+                let cutCount = stock.dividend_cut_count_10y !== undefined ? stock.dividend_cut_count_10y : 0;
+                let dividendGrade = stock.dividend_grade !== undefined ? stock.dividend_grade : "D";
+                let dividendSafetyScore = stock.dividend_safety_score !== undefined ? stock.dividend_safety_score : 0;
 
                 // Score Badge
                 let score = stock.score !== undefined ? stock.score : 0;
@@ -1337,6 +1405,16 @@
                 let scoreHtml = `<span class="badge bg-${scoreColor}" title="${escapeHtml(scoreDetails)}" style="cursor:help; font-size:0.9rem;">${score}/10 (${grade})</span>`;
                 if (stock.error) {
                     scoreHtml += ` <span class="badge bg-secondary" title="${escapeHtml(stock.error)}">ข้อมูลจำกัด</span>`;
+                }
+
+                let dividendScoreColor = "secondary";
+                if (dividendGrade === "A") dividendScoreColor = "success";
+                else if (dividendGrade === "B") dividendScoreColor = "info";
+                else if (dividendGrade === "C") dividendScoreColor = "warning";
+                let dividendScoreDetails = stock.dividend_score_details ? stock.dividend_score_details.join("\n") : "";
+                let dividendScoreHtml = `<span class="badge bg-${dividendScoreColor}" title="${escapeHtml(dividendScoreDetails)}" style="cursor:help; font-size:0.9rem;">${dividendScore}/10 (${dividendGrade})</span>`;
+                if (stock.is_dividend_safe) {
+                    dividendScoreHtml += ` <span class="badge bg-success-subtle text-success border" title="Dividend Safety ${escapeHtml(String(dividendSafetyScore))}/10">Safe</span>`;
                 }
 
                 let sourceBadges = [];
@@ -1505,6 +1583,10 @@
                     bvps,
                     `<span class="${getColorClass(revGrowth)}">${revGrowth}</span>`,
                     `<span class="${getColorClass(earnGrowth)}">${earnGrowth}</span>`,
+                    dividendScoreHtml,
+                    payoutRatio,
+                    dividendCagr5y,
+                    cutCount,
                     scoreHtml,
                     removeButtonHtml
                 ]);
@@ -1512,6 +1594,7 @@
 
             $('#filterGrowthBtn').click(filterGrowthStocks);
             $('#filterDivGrowthBtn').click(filterDivGrowthStocks);
+            $('#filterDividendSafeBtn').click(filterDividendSafeStocks);
             $('#filterUndervaluedBtn').click(filterUndervaluedStocks);
             $('#filterGradeABtn').click(filterGradeAStocks);
             $('#filterSniperBtn').click(filterSniperStocks);

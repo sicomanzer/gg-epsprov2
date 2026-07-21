@@ -125,6 +125,15 @@ def build_empty_stock_payload(ticker, error="Data Unavailable"):
         "score": 0,
         "grade": "D",
         "score_details": [],
+        "dividend_score": 0,
+        "dividend_grade": "D",
+        "dividend_score_details": [],
+        "dividend_cut_count_10y": 0,
+        "dividend_cagr_5y": "-",
+        "dividend_cagr_10y": "-",
+        "payout_ratio": "-",
+        "dividend_safety_score": 0,
+        "is_dividend_safe": False,
         "is_value_trap": False,
         "error": error,
         "details": {
@@ -141,6 +150,11 @@ def build_empty_stock_payload(ticker, error="Data Unavailable"):
             "industry": "-",
             "sector": "-",
             "description": error,
+            "payout_ratio": "-",
+            "dividend_cagr_5y": "-",
+            "dividend_cagr_10y": "-",
+            "dividend_cut_count_10y": 0,
+            "dividend_safety_score": 0,
         },
     }
 
@@ -328,6 +342,14 @@ def get_stock_data(ticker, include_description=False):
 
         final_div_rate = computed_div_rate if computed_div_rate > 0 else get_val("dividendRate", "-")
 
+        payout_ratio = "-"
+        try:
+            trailing_eps = get_float("trailingEps")
+            if trailing_eps != "-" and trailing_eps > 0 and final_div_rate != "-" and final_div_rate >= 0:
+                payout_ratio = round((float(final_div_rate) / float(trailing_eps)) * 100, 2)
+        except Exception:
+            pass
+
         debt_to_equity = get_val("debtToEquity", "-")
         try:
             bs = stock.balance_sheet
@@ -468,6 +490,123 @@ def get_stock_data(ticker, include_description=False):
         if fair_value != "-" and price != "-" and price > 0 and fair_value > 0:
             mos = round(((fair_value - price) / fair_value) * 100, 2)
 
+        de = debt_to_equity
+        dy = get_float("dividendYield", 1)
+        roe_ratio = get_float("returnOnEquity")
+        roe_percent = get_float("returnOnEquity", 100)
+        eg = get_float("earningsGrowth")
+
+        def calculate_dividend_cagr(series, years):
+            if len(series) < years:
+                return "-"
+            window = series[-years:]
+            positive = [(idx, value) for idx, value in enumerate(window) if value is not None and value > 0]
+            if len(positive) < 2:
+                return "-"
+            start_idx, start_val = positive[0]
+            end_idx, end_val = positive[-1]
+            span = end_idx - start_idx
+            if span <= 0 or start_val <= 0 or end_val <= 0:
+                return "-"
+            try:
+                return round((((end_val / start_val) ** (1 / span)) - 1) * 100, 2)
+            except Exception:
+                return "-"
+
+        dividend_cut_count_10y = 0
+        positive_divs = [value if value is not None else 0.0 for value in div_trend]
+        for i in range(1, len(positive_divs)):
+            prev_val = positive_divs[i - 1]
+            curr_val = positive_divs[i]
+            if prev_val > 0 and curr_val < prev_val * 0.85:
+                dividend_cut_count_10y += 1
+
+        dividend_cagr_5y = calculate_dividend_cagr(div_trend, 5)
+        dividend_cagr_10y = calculate_dividend_cagr(div_trend, 10)
+
+        dividend_score = 0
+        dividend_score_details = []
+
+        if dy != "-" and dy >= 3:
+            dividend_score += 1
+            dividend_score_details.append("Dividend Yield >= 3%")
+
+        if final_div_rate != "-" and final_div_rate > 0:
+            dividend_score += 1
+            dividend_score_details.append("มีเงินปันผลล่าสุด")
+
+        non_zero_div_years = sum(1 for value in div_trend if value and value > 0)
+        if non_zero_div_years >= 7:
+            dividend_score += 1
+            dividend_score_details.append("จ่ายปันผล >= 7/10 ปี")
+
+        if dividend_cut_count_10y == 0 and non_zero_div_years >= 5:
+            dividend_score += 1
+            dividend_score_details.append("ไม่ตัดปันผลแรงใน 10 ปี")
+        elif dividend_cut_count_10y <= 1 and non_zero_div_years >= 5:
+            dividend_score += 0.5
+            dividend_score_details.append("ตัดปันผลน้อย (<= 1 ครั้ง)")
+
+        if dividend_cagr_5y != "-" and dividend_cagr_5y > 3:
+            dividend_score += 1
+            dividend_score_details.append(f"Dividend CAGR 5Y > 3% ({dividend_cagr_5y}%)")
+
+        if payout_ratio != "-" and 20 <= payout_ratio <= 80:
+            dividend_score += 1
+            dividend_score_details.append(f"Payout Ratio สมดุล ({payout_ratio}%)")
+        elif payout_ratio != "-" and payout_ratio <= 100:
+            dividend_score += 0.5
+            dividend_score_details.append(f"Payout Ratio พอรับได้ ({payout_ratio}%)")
+
+        if de != "-" and de < 1.5:
+            dividend_score += 1
+            dividend_score_details.append("D/E < 1.5")
+
+        if roe_percent != "-" and roe_percent > 12:
+            dividend_score += 1
+            dividend_score_details.append("ROE > 12%")
+
+        if mos != "-" and mos > 0:
+            dividend_score += 1
+            dividend_score_details.append(f"มี Margin of Safety ({mos}%)")
+
+        if eg != "-" and eg > 0:
+            dividend_score += 1
+            dividend_score_details.append("กำไรยังเติบโต")
+
+        dividend_score = round(dividend_score, 1)
+        dividend_grade = "D"
+        if dividend_score >= 8:
+            dividend_grade = "A"
+        elif dividend_score >= 6:
+            dividend_grade = "B"
+        elif dividend_score >= 4:
+            dividend_grade = "C"
+
+        dividend_safety_score = 0
+        if payout_ratio != "-" and 20 <= payout_ratio <= 80:
+            dividend_safety_score += 2
+        elif payout_ratio != "-" and payout_ratio <= 100:
+            dividend_safety_score += 1
+        if dividend_cut_count_10y == 0:
+            dividend_safety_score += 2
+        elif dividend_cut_count_10y <= 1:
+            dividend_safety_score += 1
+        if de != "-" and de < 1.5:
+            dividend_safety_score += 2
+        elif de != "-" and de < 2.0:
+            dividend_safety_score += 1
+        if non_zero_div_years >= 7:
+            dividend_safety_score += 2
+        elif non_zero_div_years >= 5:
+            dividend_safety_score += 1
+        if eg != "-" and eg > 0:
+            dividend_safety_score += 1
+        if roe_percent != "-" and roe_percent > 12:
+            dividend_safety_score += 1
+
+        is_dividend_safe = dividend_safety_score >= 6 and dividend_score >= 6 and dy != "-" and dy >= 3
+
         score = 0
         score_details = []
 
@@ -488,17 +627,15 @@ def get_stock_data(ticker, include_description=False):
             score += 1
             score_details.append(f"Price < Fair Value (MOS {mos}%)")
 
-        roe = get_float("returnOnEquity")
+        roe = roe_ratio
         if roe != "-" and roe > 0.12:
             score += 1
             score_details.append("ROE > 12%")
 
-        de = debt_to_equity
         if de != "-" and de < 1.5:
             score += 1
             score_details.append("D/E < 1.5")
 
-        dy = get_float("dividendYield", 1)
         if dy != "-" and dy > 3:
             score += 1
             score_details.append("Yield > 3%")
@@ -569,6 +706,15 @@ def get_stock_data(ticker, include_description=False):
             "score": score,
             "grade": grade,
             "score_details": score_details,
+            "dividend_score": dividend_score,
+            "dividend_grade": dividend_grade,
+            "dividend_score_details": dividend_score_details,
+            "dividend_cut_count_10y": dividend_cut_count_10y,
+            "dividend_cagr_5y": dividend_cagr_5y,
+            "dividend_cagr_10y": dividend_cagr_10y,
+            "payout_ratio": payout_ratio,
+            "dividend_safety_score": dividend_safety_score,
+            "is_dividend_safe": is_dividend_safe,
             "is_value_trap": is_value_trap,
             "error": None,
             "details": {
@@ -585,6 +731,11 @@ def get_stock_data(ticker, include_description=False):
                 "industry": get_val("industry", "-"),
                 "sector": get_val("sector", "-"),
                 "description": description,
+                "payout_ratio": payout_ratio,
+                "dividend_cagr_5y": dividend_cagr_5y,
+                "dividend_cagr_10y": dividend_cagr_10y,
+                "dividend_cut_count_10y": dividend_cut_count_10y,
+                "dividend_safety_score": dividend_safety_score,
             },
         }
     except Exception:
