@@ -1,3 +1,5 @@
+import json
+import os
 import re
 from datetime import datetime
 from functools import lru_cache
@@ -18,6 +20,7 @@ except Exception:
 
 
 FINNOMENA_BASE_URL = "https://www.finnomena.com/market-info/api/public"
+EPS_CACHE_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "eps_history_cache.json")
 
 
 def _log_warning(message, exc=None):
@@ -30,6 +33,16 @@ def _log_warning(message, exc=None):
             current_app.logger.warning("%s", message)
     except Exception:
         return
+
+
+@lru_cache(maxsize=1)
+def _load_packaged_eps_cache():
+    try:
+        with open(EPS_CACHE_FILE, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
 
 
 def normalize_ticker(raw_ticker):
@@ -113,6 +126,22 @@ def get_thaifin_symbol(ticker):
     return config.THAIFIN_TICKER_ALIASES.get(ticker, ticker)
 
 
+def _build_eps_series_from_year_map(ticker, years_eps):
+    cache = _load_packaged_eps_cache()
+    alias = get_thaifin_symbol(ticker)
+    yearly_map = cache.get(str(ticker).upper()) or cache.get(str(alias).upper()) or {}
+    eps_trend = [None] * len(years_eps)
+    for idx, year in enumerate(years_eps):
+        value = yearly_map.get(str(year))
+        if value is None:
+            continue
+        try:
+            eps_trend[idx] = float(value)
+        except Exception:
+            eps_trend[idx] = None
+    return eps_trend
+
+
 @lru_cache(maxsize=2)
 def _get_finnomena_security_id_map(cache_day):
     response = requests.get(
@@ -169,6 +198,10 @@ def _get_finnomena_yearly_eps(security_id, cache_day):
 def get_eps_trend_from_thaifin(ticker, current_year):
     years_eps = [current_year - config.EPS_TREND_YEARS + i for i in range(config.EPS_TREND_YEARS)]
     eps_trend = [None] * config.EPS_TREND_YEARS
+
+    eps_trend = _build_eps_series_from_year_map(ticker, years_eps)
+    if any(val is not None for val in eps_trend):
+        return tuple(years_eps), tuple(eps_trend)
 
     cache_day = datetime.utcnow().strftime("%Y%m%d")
     try:
