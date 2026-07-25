@@ -359,6 +359,9 @@ def get_stock_data(ticker, include_description=False):
 
         final_div_rate = computed_div_rate if computed_div_rate > 0 else (yf_div_rate_float if yf_div_rate_float > 0 else "-")
 
+        if dividends.empty and final_div_rate != "-" and final_div_rate > 0:
+            div_trend[-1] = float(final_div_rate)
+
         payout_ratio = "-"
         try:
             trailing_eps = get_float("trailingEps")
