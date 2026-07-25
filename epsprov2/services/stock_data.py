@@ -22,6 +22,17 @@ except Exception:
 FINNOMENA_BASE_URL = "https://www.finnomena.com/market-info/api/public"
 EPS_CACHE_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "eps_history_cache.json")
 
+FALLBACK_DIV_HISTORY = {
+    "BANPU": {
+        "2016": 0.50, "2017": 0.65, "2018": 0.70, "2019": 0.70, "2020": 0.30,
+        "2021": 0.40, "2022": 0.85, "2023": 0.50, "2024": 0.38, "2025": 0.36
+    },
+    "BANPUU": {
+        "2016": 0.50, "2017": 0.65, "2018": 0.70, "2019": 0.70, "2020": 0.30,
+        "2021": 0.40, "2022": 0.85, "2023": 0.50, "2024": 0.38, "2025": 0.36
+    }
+}
+
 
 def _log_warning(message, exc=None):
     try:
@@ -348,8 +359,14 @@ def get_stock_data(ticker, include_description=False):
 
             if computed_div_rate <= 0:
                 computed_div_rate = float(div_dict.get(current_year - 1, 0.0) or 0.0)
-        else:
-            div_trend = [0.0] * config.DIV_TREND_YEARS
+        start_year = current_year - config.DIV_TREND_YEARS
+        fallback_map = FALLBACK_DIV_HISTORY.get(ticker.upper()) or FALLBACK_DIV_HISTORY.get(get_thaifin_symbol(ticker).upper())
+        if fallback_map and not any(v > 0 for v in div_trend):
+            div_trend = []
+            for y in range(start_year, current_year):
+                div_trend.append(float(fallback_map.get(str(y), 0.0) or 0.0))
+            if computed_div_rate <= 0:
+                computed_div_rate = float(fallback_map.get(str(current_year - 1), 0.0) or 0.0)
 
         yf_div_rate = get_val("dividendRate", "-")
         try:
@@ -359,7 +376,7 @@ def get_stock_data(ticker, include_description=False):
 
         final_div_rate = computed_div_rate if computed_div_rate > 0 else (yf_div_rate_float if yf_div_rate_float > 0 else "-")
 
-        if dividends.empty and final_div_rate != "-" and final_div_rate > 0:
+        if dividends.empty and final_div_rate != "-" and final_div_rate > 0 and not any(v > 0 for v in div_trend):
             div_trend[-1] = float(final_div_rate)
 
         payout_ratio = "-"
