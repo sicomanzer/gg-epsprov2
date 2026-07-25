@@ -175,12 +175,15 @@
         <div class="card table-container mb-4">
             
             <div class="d-flex flex-wrap gap-2 mb-3">
+                 <button id="filterKaweeDcaBtn" class="btn text-white shadow-sm" style="background-color: #198754;" title="คัดหุ้นผู้ชนะน่าออม (VI/DCA Winner)"><i class="bi bi-award-fill"></i> 🟢 หุ้นผู้ชนะน่าออม (VI/DCA)</button>
+                 <button id="filterKaweeWatchlistBtn" class="btn btn-warning text-dark shadow-sm" title="คัดหุ้นรอราคาปรับฐาน"><i class="bi bi-clock-history"></i> 🟡 รอราคาปรับฐาน (Watchlist)</button>
+                 <button id="filterKaweeRedFlagBtn" class="btn btn-danger shadow-sm" title="คัดหุ้นกลุ่มเตือนความเสี่ยง"><i class="bi bi-exclamation-triangle-fill"></i> 🔴 กลุ่มเตือนความเสี่ยง (Red Flag)</button>
                  <button id="filterGrowthBtn" class="btn btn-primary shadow-sm"><i class="bi bi-graph-up"></i> คัดกรองหุ้นเติบโต</button>
                  <button id="filterDivGrowthBtn" class="btn btn-info shadow-sm text-white"><i class="bi bi-piggy-bank"></i> คัดหุ้นปันผลเติบโต (10Y)</button>
                  <button id="filterDividendSafeBtn" class="btn btn-dark shadow-sm"><i class="bi bi-shield-check"></i> หุ้นปันผลปลอดภัย</button>
-                 <button id="filterUndervaluedBtn" class="btn btn-warning shadow-sm"><i class="bi bi-currency-dollar"></i> คัดราคา < Fair Value</button>
+                 <button id="filterUndervaluedBtn" class="btn btn-outline-warning shadow-sm text-dark"><i class="bi bi-currency-dollar"></i> คัดราคา < Fair Value</button>
                  <button id="filterGradeABtn" class="btn btn-success shadow-sm" title="คัดหุ้นเกรด A (Score >= {{ grade_a_min_score }})"><i class="bi bi-star-fill"></i> คัดหุ้นเกรด A (Guru)</button>
-                 <button id="filterSniperBtn" class="btn btn-danger shadow-sm" title="Grade A + MOS > {{ sniper_min_mos }}% + RSI < 50"><i class="bi bi-crosshair"></i> Sniper Mode (Superhuman)</button>
+                 <button id="filterSniperBtn" class="btn btn-outline-danger shadow-sm" title="Grade A + MOS > {{ sniper_min_mos }}% + RSI < 50"><i class="bi bi-crosshair"></i> Sniper Mode (Superhuman)</button>
             </div>
 
             <div id="loading" class="loading">
@@ -260,6 +263,47 @@
                     <div class="my-3">
                         <h6 class="fw-bold mb-2">ลักษณะธุรกิจ</h6>
                         <p id="modal-desc" class="small text-muted p-2 bg-light rounded border border-light-subtle mb-0" style="max-height: 120px; overflow-y: auto; text-align: justify; line-height: 1.5;"></p>
+                    </div>
+
+                    <!-- Kawee VI/MI Engine Analysis Container -->
+                    <div id="kawee-modal-section" class="my-3 p-3 rounded-3 border shadow-sm" style="background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h6 class="fw-bold mb-0 text-primary"><i class="bi bi-award-fill text-warning"></i> Kawee VI/MI Engine Analysis (อ.กวี ชูกิจเกษม)</h6>
+                            <div>
+                                <span id="modal-kawee-status-badge"></span>
+                                <span id="modal-kawee-score-badge" class="ms-1"></span>
+                            </div>
+                        </div>
+
+                        <!-- Kawee's Take Summary -->
+                        <div class="p-3 mb-3 bg-white rounded border border-primary-subtle border-start border-4 border-primary shadow-sm">
+                            <small class="text-muted fw-bold d-block mb-1"><i class="bi bi-chat-quote-fill text-primary"></i> Kawee's Take (คำแนะนำสรุปสไตล์ อ.กวี):</small>
+                            <span id="modal-kawee-take" class="small fw-semibold text-dark"></span>
+                        </div>
+
+                        <!-- Red Flag Warning Alert if any -->
+                        <div id="modal-kawee-redflags-container"></div>
+
+                        <div class="row g-3">
+                            <!-- Key Checklists (4 Items) -->
+                            <div class="col-md-7">
+                                <div class="bg-white p-3 rounded border h-100 shadow-sm">
+                                    <small class="text-muted fw-bold d-block mb-2"><i class="bi bi-check2-square text-success"></i> Key Checklist Summary (เช็กลิสต์สำคัญ):</small>
+                                    <div id="modal-kawee-checklists" class="row g-2 small"></div>
+                                </div>
+                            </div>
+                            <!-- EYG & Mega Trend -->
+                            <div class="col-md-5">
+                                <div class="bg-white p-3 rounded border h-100 shadow-sm">
+                                    <small class="text-muted fw-bold d-block mb-1"><i class="bi bi-speedometer2 text-info"></i> Earning Yield Gap (EYG):</small>
+                                    <div id="modal-kawee-eyg" class="fw-bold fs-4 text-dark mb-0"></div>
+                                    <div id="modal-kawee-eyg-label" class="small text-muted mb-2"></div>
+                                    <hr class="my-2">
+                                    <small class="text-muted fw-bold d-block mb-1"><i class="bi bi-globe2 text-primary"></i> Mega Trend Alignment:</small>
+                                    <div id="modal-kawee-megatrend" class="small fw-semibold text-primary"></div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="row my-4">
@@ -771,7 +815,44 @@
                     error: function() {
                         $('#modal-desc').text('-');
                     }
-                });
+                // Populate Kawee VI Engine Modal Section
+                let kScore = stock.kawee_vi_score !== undefined ? stock.kawee_vi_score : 0;
+                let kStatusLabel = stock.kawee_status_label || "รอราคาปรับฐาน (Fair Price / Watchlist)";
+                let kStatusColor = stock.kawee_status_color || "warning";
+                
+                $('#modal-kawee-status-badge').html(`<span class="badge bg-${kStatusColor} px-2 py-1 fs-6">${escapeHtml(kStatusLabel)}</span>`);
+                $('#modal-kawee-score-badge').html(`<span class="badge bg-primary px-2 py-1 fs-6" title="Kawee VI Score (0-100)">Kawee Score: ${kScore}/100</span>`);
+                $('#modal-kawee-take').text(stock.kawee_take || "-");
+
+                // Red Flags
+                let redFlagsHtml = "";
+                if (stock.red_flags && stock.red_flags.length > 0) {
+                    redFlagsHtml = `<div class="alert alert-danger py-2 px-3 mb-3 small" role="alert">
+                        <strong class="d-block mb-1"><i class="bi bi-exclamation-triangle-fill me-1"></i> Red Flag Warning (ข้อควรระวังสำคัญ):</strong>
+                        <ul class="mb-0 ps-3">`;
+                    stock.red_flags.forEach(flag => {
+                        redFlagsHtml += `<li>${escapeHtml(flag)}</li>`;
+                    });
+                    redFlagsHtml += `</ul></div>`;
+                }
+                $('#modal-kawee-redflags-container').html(redFlagsHtml);
+
+                // Checklists
+                let checklistsHtml = "";
+                if (stock.checklists && stock.checklists.length > 0) {
+                    stock.checklists.forEach(item => {
+                        let icon = item.passed ? '<i class="bi bi-check-circle-fill text-success fs-6 me-1"></i>' : '<i class="bi bi-x-circle-fill text-muted fs-6 me-1"></i>';
+                        let textClass = item.passed ? 'fw-bold text-dark' : 'text-muted';
+                        checklistsHtml += `<div class="col-12"><div class="d-flex align-items-center">${icon} <span class="${textClass}">${escapeHtml(item.label)}</span></div></div>`;
+                    });
+                }
+                $('#modal-kawee-checklists').html(checklistsHtml);
+
+                // EYG & Mega Trend
+                let eygVal = stock.eyg !== undefined && stock.eyg !== "-" ? `${stock.eyg}%` : "-";
+                $('#modal-kawee-eyg').text(eygVal);
+                $('#modal-kawee-eyg-label').text(stock.eyg_label || "-");
+                $('#modal-kawee-megatrend').text(stock.mega_trend ? `กลุ่ม ${stock.mega_trend}` : "นอกกลุ่ม Mega Trend หลัก");
 
                 // Populate Financial Ratios (Dynamic List)
                 let ratios = [
@@ -1591,6 +1672,49 @@
                     removeButtonHtml
                 ]);
             }
+
+            function filterKaweeDcaStocks() {
+                if (!stocksData || stocksData.length === 0) return;
+                let dcaStocks = stocksData.filter(stock => stock.kawee_status === "dca_winner");
+                if (dcaStocks.length === 0) {
+                    alert("ไม่พบหุ้นในเกณฑ์ 'หุ้นผู้ชนะน่าออม (VI/DCA Winner)' ในขณะนี้");
+                    return;
+                }
+                table.clear();
+                dcaStocks.forEach((stock, index) => addStockRow(stock, index));
+                table.draw();
+                resetOtherButtons('kaweeDca');
+            }
+
+            function filterKaweeWatchlistStocks() {
+                if (!stocksData || stocksData.length === 0) return;
+                let watchlistStocks = stocksData.filter(stock => stock.kawee_status === "watchlist");
+                if (watchlistStocks.length === 0) {
+                    alert("ไม่พบหุ้นในเกณฑ์ 'รอราคาปรับฐาน (Fair Price / Watchlist)'");
+                    return;
+                }
+                table.clear();
+                watchlistStocks.forEach((stock, index) => addStockRow(stock, index));
+                table.draw();
+                resetOtherButtons('kaweeWatchlist');
+            }
+
+            function filterKaweeRedFlagStocks() {
+                if (!stocksData || stocksData.length === 0) return;
+                let redFlagStocks = stocksData.filter(stock => stock.kawee_status === "red_flag");
+                if (redFlagStocks.length === 0) {
+                    alert("ไม่พบหุ้นในกลุ่ม 'เตือนความเสี่ยง (Red Flag Warning)'");
+                    return;
+                }
+                table.clear();
+                redFlagStocks.forEach((stock, index) => addStockRow(stock, index));
+                table.draw();
+                resetOtherButtons('kaweeRedFlag');
+            }
+
+            $('#filterKaweeDcaBtn').click(filterKaweeDcaStocks);
+            $('#filterKaweeWatchlistBtn').click(filterKaweeWatchlistStocks);
+            $('#filterKaweeRedFlagBtn').click(filterKaweeRedFlagStocks);
 
             $('#filterGrowthBtn').click(filterGrowthStocks);
             $('#filterDivGrowthBtn').click(filterDivGrowthStocks);

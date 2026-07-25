@@ -735,6 +735,133 @@ def get_stock_data(ticker, include_description=False):
         if include_description:
             description = get_val("longBusinessSummary", "-")
 
+        # --- KAWEE SHUKITKASEM VI/MI ENGINE ---
+        MEGA_TREND_MAPPING = {
+            "Aging Society & Health Hub": ["BDMS", "BH", "BCH", "CHG", "PR9"],
+            "Tourism & Service Hub": ["AOT", "CENTEL", "MINT", "BA", "ERW"],
+            "Domestic Consumption & Retail": ["CPALL", "CPN", "CPAXT", "CRC", "HMPRO", "GLOBAL", "DOHOME", "COM7", "ICHI", "MOSHI"],
+            "Digital Infrastructure & Utilities": ["ADVANC", "TRUE", "WHA", "GULF", "GPSC", "BGRIM", "DELTA", "AMATA"]
+        }
+
+        clean_ticker = ticker.upper()
+        mega_trend_category = None
+        for cat, syms in MEGA_TREND_MAPPING.items():
+            if clean_ticker in syms:
+                mega_trend_category = cat
+                break
+        is_mega_trend = mega_trend_category is not None
+
+        CYCLICAL_COMMODITY_SYMBOLS = {
+            "PTT", "PTTEP", "PTTGC", "BANPU", "BANPUU", "IVL", "IRPC", "RCL", "STA", "STGT",
+            "TOP", "SPRC", "BCP", "BCPG", "CBG", "CCET"
+        }
+        FINANCIAL_SECTOR_SYMBOLS = {
+            "BBL", "KBANK", "SCB", "KTB", "TTB", "KKP", "TISCO", "KTC", "AEONTS", "MTC",
+            "SAWAD", "TIDLOR", "BAM", "JMT", "TLI", "BLA"
+        }
+
+        red_flags = []
+        if clean_ticker in CYCLICAL_COMMODITY_SYMBOLS:
+            red_flags.append("หุ้นกลุ่มโภคภัณฑ์/วัฏจักร (กำไรผันผวนสูงตามราคาตลาดโลก ไม่เหมาะกับ DCA ถือยาว)")
+
+        is_financial = clean_ticker in FINANCIAL_SECTOR_SYMBOLS
+        if not is_financial and de != "-" and de > 1.5:
+            red_flags.append(f"ภาระหนี้สินสูง (D/E {de} > 1.5 เท่า)")
+
+        gross_margin_val = get_float("grossMargins", 100)
+        if gross_margin_val != "-" and gross_margin_val < 10:
+            red_flags.append(f"อัตรากำไรขั้นต้นต่ำ (GPM {gross_margin_val:.2f}% < 10%)")
+
+        kawee_roe_score = 0
+        if roe_percent != "-":
+            if roe_percent >= 15: kawee_roe_score = 25
+            elif roe_percent >= 12: kawee_roe_score = 20
+            elif roe_percent >= 8: kawee_roe_score = 12
+            elif roe_percent > 0: kawee_roe_score = 5
+
+        kawee_gpm_score = 0
+        if gross_margin_val != "-":
+            if gross_margin_val >= 30: kawee_gpm_score = 20
+            elif gross_margin_val >= 20: kawee_gpm_score = 15
+            elif gross_margin_val >= 10: kawee_gpm_score = 10
+            elif gross_margin_val > 0: kawee_gpm_score = 5
+
+        kawee_de_score = 0
+        if is_financial:
+            kawee_de_score = 20
+        elif de != "-":
+            if de < 1.0: kawee_de_score = 20
+            elif de < 1.5: kawee_de_score = 15
+            elif de < 2.0: kawee_de_score = 8
+
+        kawee_div_score = 0
+        if calculated_div_yield != "-":
+            try:
+                dy_num = float(calculated_div_yield)
+                if dy_num >= 3.5 and dividend_cut_count_10y == 0: kawee_div_score = 20
+                elif dy_num >= 3.5: kawee_div_score = 15
+                elif dy_num >= 2.0: kawee_div_score = 10
+                elif dy_num > 0: kawee_div_score = 5
+            except Exception:
+                kawee_div_score = 0
+
+        kawee_megatrend_score = 15 if is_mega_trend else 5
+        kawee_vi_score = round(kawee_roe_score + kawee_gpm_score + kawee_de_score + kawee_div_score + kawee_megatrend_score, 1)
+
+        if red_flags:
+            kawee_status = "red_flag"
+            kawee_status_label = "เตือนความเสี่ยง (Red Flag Warning)"
+            kawee_status_color = "danger"
+        elif kawee_vi_score >= 65 and (calculated_div_yield != "-" and float(calculated_div_yield) >= 3.5):
+            kawee_status = "dca_winner"
+            kawee_status_label = "หุ้นผู้ชนะน่าออม (VI/DCA Winner)"
+            kawee_status_color = "success"
+        else:
+            kawee_status = "watchlist"
+            kawee_status_label = "รอราคาปรับฐาน (Fair Price / Watchlist)"
+            kawee_status_color = "warning"
+
+        eyg = "-"
+        eyg_label = "-"
+        pe_trailing_val = get_float("trailingPE")
+        if pe_trailing_val != "-" and pe_trailing_val > 0:
+            try:
+                earning_yield = (1.0 / float(pe_trailing_val)) * 100
+                eyg = round(earning_yield - 2.5, 2)
+                if eyg >= 4.5:
+                    eyg_label = "โซนราคาถูก/น่าซื้อ (EYG >= 4.5%)"
+                elif eyg >= 2.0:
+                    eyg_label = "โซนราคาเหมาะสม (Fair Zone)"
+                else:
+                    eyg_label = "โซนราคาแพง (Overvalued Zone)"
+            except Exception:
+                eyg = "-"
+
+        checklists = [
+            {"label": "ผ่านวิกฤต/มีประวัติผลประกอบการย้อนหลังต่อเนื่อง", "passed": non_zero_div_years >= 5 or len([x for x in eps_trend if x is not None]) >= 7},
+            {"label": "ROE >= 12% (ความสามารถทำกำไรดี)", "passed": roe_percent != "-" and roe_percent >= 12},
+            {"label": "ภาระหนี้สิน D/E < 1.0 เท่า", "passed": is_financial or (de != "-" and de < 1.0)},
+            {"label": "เงินปันผลตอบแทน Yield >= 3.5%", "passed": calculated_div_yield != "-" and float(calculated_div_yield) >= 3.5}
+        ]
+
+        kawee_take_parts = []
+        if is_mega_trend:
+            kawee_take_parts.append(f"อยู่ใน Mega Trend ({mega_trend_category})")
+        else:
+            kawee_take_parts.append("เป็นหุ้นธุรกิจทั่วไปนอกกลุ่ม Mega Trend หลัก")
+
+        if kawee_status == "red_flag":
+            kawee_take_parts.append(f"ข้อควรระวัง: {', '.join(red_flags)}")
+        elif kawee_status == "dca_winner":
+            kawee_take_parts.append("พื้นฐานแข็งแกร่ง ปันผลสม่ำเสมอ เหมาะสำหรับการถือยาวและทยอยออม DCA")
+        else:
+            kawee_take_parts.append("พื้นฐานดีพอใช้ ควรรอจังหวะราคาปรับฐานเพื่อให้มี Margin of Safety เพิ่มขึ้น")
+
+        if mos != "-" and float(mos) > 15:
+            kawee_take_parts.append(f"มี Margin of Safety สูง ({mos}%) น่าสนใจในการทยอยสะสม")
+
+        kawee_take = " | ".join(kawee_take_parts)
+
         return {
             "symbol": ticker,
             "name": get_val("longName", ticker),
@@ -774,6 +901,16 @@ def get_stock_data(ticker, include_description=False):
             "dividend_safety_score": dividend_safety_score,
             "is_dividend_safe": is_dividend_safe,
             "is_value_trap": is_value_trap,
+            "kawee_vi_score": kawee_vi_score,
+            "kawee_status": kawee_status,
+            "kawee_status_label": kawee_status_label,
+            "kawee_status_color": kawee_status_color,
+            "eyg": eyg,
+            "eyg_label": eyg_label,
+            "red_flags": red_flags,
+            "checklists": checklists,
+            "kawee_take": kawee_take,
+            "mega_trend": mega_trend_category,
             "error": None,
             "details": {
                 "roa": get_float("returnOnAssets", 100),
