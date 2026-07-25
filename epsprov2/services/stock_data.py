@@ -838,10 +838,10 @@ def get_stock_data(ticker, include_description=False):
                 eyg = "-"
 
         checklists = [
-            {"label": "ผ่านวิกฤต/มีประวัติผลประกอบการย้อนหลังต่อเนื่อง", "passed": non_zero_div_years >= 5 or len([x for x in eps_trend if x is not None]) >= 7},
-            {"label": "ROE >= 12% (ความสามารถทำกำไรดี)", "passed": roe_percent != "-" and roe_percent >= 12},
-            {"label": "ภาระหนี้สิน D/E < 1.0 เท่า", "passed": is_financial or (de != "-" and de < 1.0)},
-            {"label": "เงินปันผลตอบแทน Yield >= 3.5%", "passed": calculated_div_yield != "-" and float(calculated_div_yield) >= 3.5}
+            {"label": "ผ่านวิกฤต/มีประวัติผลประกอบการย้อนหลังต่อเนื่อง", "passed": bool(non_zero_div_years >= 5 or len([x for x in eps_trend if x is not None]) >= 7)},
+            {"label": "ROE >= 12% (ความสามารถทำกำไรดี)", "passed": bool(roe_percent != "-" and roe_percent >= 12)},
+            {"label": "ภาระหนี้สิน D/E < 1.0 เท่า", "passed": bool(is_financial or (de != "-" and de < 1.0))},
+            {"label": "เงินปันผลตอบแทน Yield >= 3.5%", "passed": bool(calculated_div_yield != "-" and float(calculated_div_yield) >= 3.5)}
         ]
 
         kawee_take_parts = []
