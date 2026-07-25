@@ -327,20 +327,37 @@ def get_stock_data(ticker, include_description=False):
                     eps_trend[-1] = t_eps
 
         div_trend = []
-        computed_div_rate = 0
+        computed_div_rate = 0.0
         dividends = stock.dividends
         if not dividends.empty:
             div_yearly = dividends.resample("YE").sum()
             div_dict = {ts.year: val for ts, val in div_yearly.items()}
 
-            computed_div_rate = float(div_dict.get(current_year - 1, 0.0) or 0.0)
             start_year = current_year - config.DIV_TREND_YEARS
             for y in range(start_year, current_year):
                 div_trend.append(float(div_dict.get(y, 0.0) or 0.0))
+
+            try:
+                now_tz = pd.Timestamp.now(tz=dividends.index.tz) if dividends.index.tz is not None else pd.Timestamp.now()
+                ttm_cutoff = now_tz - pd.Timedelta(days=365)
+                ttm_div_series = dividends[dividends.index >= ttm_cutoff]
+                if not ttm_div_series.empty:
+                    computed_div_rate = float(ttm_div_series.sum())
+            except Exception:
+                computed_div_rate = 0.0
+
+            if computed_div_rate <= 0:
+                computed_div_rate = float(div_dict.get(current_year - 1, 0.0) or 0.0)
         else:
             div_trend = [0.0] * config.DIV_TREND_YEARS
 
-        final_div_rate = computed_div_rate if computed_div_rate > 0 else get_val("dividendRate", "-")
+        yf_div_rate = get_val("dividendRate", "-")
+        try:
+            yf_div_rate_float = float(yf_div_rate) if yf_div_rate != "-" else 0.0
+        except Exception:
+            yf_div_rate_float = 0.0
+
+        final_div_rate = computed_div_rate if computed_div_rate > 0 else (yf_div_rate_float if yf_div_rate_float > 0 else "-")
 
         payout_ratio = "-"
         try:
@@ -440,6 +457,23 @@ def get_stock_data(ticker, include_description=False):
         except Exception:
             pass
 
+        price = get_float("currentPrice")
+        calculated_div_yield = "-"
+        if price != "-" and price > 0 and final_div_rate != "-" and final_div_rate > 0:
+            calculated_div_yield = round((float(final_div_rate) / float(price)) * 100, 2)
+        else:
+            yf_dy = get_float("dividendYield")
+            if yf_dy != "-":
+                try:
+                    yf_dy_val = float(yf_dy)
+                    calculated_div_yield = round(yf_dy_val * 100 if yf_dy_val < 1 else yf_dy_val, 2)
+                except Exception:
+                    calculated_div_yield = "-"
+
+        dy = calculated_div_yield if calculated_div_yield != "-" else get_float("dividendYield", 1)
+        if dy != "-" and dy < 1 and dy > 0:
+            dy = round(dy * 100, 2)
+
         lynch_value = "-"
         try:
             eps_ttm = get_float("trailingEps")
@@ -448,7 +482,7 @@ def get_stock_data(ticker, include_description=False):
                 g_percent = growth_rate * 100
                 if g_percent > 25:
                     g_percent = 25
-                div_yield_percent = get_float("dividendYield", 1, 0)
+                div_yield_percent = dy if (dy != "-" and dy > 0) else 0
                 lynch_value = round(eps_ttm * (g_percent + div_yield_percent), 2)
         except Exception:
             pass
@@ -469,7 +503,6 @@ def get_stock_data(ticker, include_description=False):
             pass
 
         mos = "-"
-        price = get_float("currentPrice")
         fair_value = ddm_value
 
         valid_values = []
@@ -491,7 +524,6 @@ def get_stock_data(ticker, include_description=False):
             mos = round(((fair_value - price) / fair_value) * 100, 2)
 
         de = debt_to_equity
-        dy = get_float("dividendYield", 1)
         roe_ratio = get_float("returnOnEquity")
         roe_percent = get_float("returnOnEquity", 100)
         eg = get_float("earningsGrowth")
@@ -682,9 +714,7 @@ def get_stock_data(ticker, include_description=False):
             "pe_trailing": get_val("trailingPE", "-"),
             "pe_forward": get_val("forwardPE", "-"),
             "market_cap": get_val("marketCap", 0),
-            "dividend_yield": get_float("dividendYield", 1)
-            if get_float("dividendYield") != "-"
-            else "-",
+            "dividend_yield": calculated_div_yield,
             "dividend_rate": final_div_rate,
             "ddm_value": ddm_value,
             "ddm_k": k_percent,
