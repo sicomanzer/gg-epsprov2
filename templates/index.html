@@ -306,6 +306,81 @@
                         </div>
                     </div>
 
+                    <!-- Kawee Beginner Action & Tranche Planner -->
+                    <div id="kawee-action-planner-section" class="my-4 p-3 rounded-3 border shadow-sm" style="background: #ffffff;">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h6 class="fw-bold mb-0 text-dark">
+                                <i class="bi bi-compass-fill text-primary me-1"></i> Kawee Beginner Action & Tranche Planner (วางแผนไม้ซื้อ-ขายสไตล์ อ.กวี)
+                            </h6>
+                            <span id="modal-action-signal-badge"></span>
+                        </div>
+
+                        <!-- Budget Input & Position Size Calculator -->
+                        <div class="row align-items-center p-3 mb-3 bg-light rounded border g-2">
+                            <div class="col-md-5">
+                                <label for="modal-user-budget" class="form-label small fw-bold text-secondary mb-1">
+                                    <i class="bi bi-wallet2 text-success me-1"></i> ระบุงบประมาณลงทุนที่ต้องการ (บาท):
+                                </label>
+                                <div class="input-group input-group-sm">
+                                    <span class="input-group-text bg-white">฿</span>
+                                    <input type="number" id="modal-user-budget" class="form-control fw-bold text-primary" value="50000" step="5000" min="1000">
+                                </div>
+                            </div>
+                            <div class="col-md-7">
+                                <div class="small text-muted" id="modal-budget-summary-text">
+                                    ระบุงบประมาณของคุณ ระบบจะคำนวณจำนวนหุ้น และจัดสรรเงินลงทุนในแต่ละไม้ให้อัตโนมัติทันที
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tranche Plan Table (VI / DCA / Buy Dips) -->
+                        <div class="mb-3">
+                            <small class="fw-bold text-primary d-block mb-2"><i class="bi bi-layers-fill me-1"></i> แผนการทยอยสะสม 3 ไม้ (เมื่อราคาปรับตัวลงมา / สาย VI ออมหุ้น):</small>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered mb-0 align-middle text-center small">
+                                    <thead class="table-dark">
+                                        <tr>
+                                            <th>ลำดับไม้</th>
+                                            <th>สัดส่วนเงิน</th>
+                                            <th>ราคาตั้งรับ (บาท)</th>
+                                            <th>งบประมาณ (บาท)</th>
+                                            <th>จำนวนหุ้น (หุ้น)</th>
+                                            <th>สถานะคำแนะนำ</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="tranche-plan-tbody">
+                                        <!-- Populated dynamically by JS -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Momentum Plan (MI / Trend Following) -->
+                        <div>
+                            <small class="fw-bold text-info d-block mb-2"><i class="bi bi-graph-up-arrow me-1"></i> แผนซื้อเพิ่มตามแนวโน้ม & ล็อคกำไร (เมื่อราคาขึ้นไป / สาย MI เก็งกำไร):</small>
+                            <div class="row g-2 text-center small">
+                                <div class="col-md-4">
+                                    <div class="p-2 border rounded bg-light">
+                                        <div class="text-muted">Breakout Buy (จุดตาม)</div>
+                                        <div id="mi-breakout-price" class="fw-bold text-dark fs-6">-</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="p-2 border rounded bg-light">
+                                        <div class="text-muted">Pyramiding Up (ซื้อเพิ่มยามขึ้น)</div>
+                                        <div id="mi-pyramiding-price" class="fw-bold text-primary fs-6">-</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="p-2 border rounded bg-light">
+                                        <div class="text-muted">Trailing Stop (จุดขายล็อคกำไร)</div>
+                                        <div id="mi-trailing-stop-price" class="fw-bold text-danger fs-6">-</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="row my-4">
                         <div class="col-12" id="valuation-matrix-container">
                              <!-- Valuation Matrix will be inserted here -->
@@ -856,6 +931,57 @@
                 $('#modal-kawee-eyg-label').text(stock.eyg_label || "-");
                 $('#modal-kawee-megatrend').text(stock.mega_trend ? `กลุ่ม ${stock.mega_trend}` : "นอกกลุ่ม Mega Trend หลัก");
 
+                // Populate Kawee Action & Tranche Planner
+                let plan = stock.action_plan || {};
+                $('#modal-action-signal-badge').html(`<span class="badge bg-${plan.action_signal_color || 'secondary'} px-3 py-2 fs-6">${escapeHtml(plan.action_signal || '🟡 ถือต่อรอดูแนวโน้ม')}</span>`);
+                $('#mi-breakout-price').text(plan.breakout_price ? `${formatNumber(plan.breakout_price)} ฿` : "-");
+                $('#mi-pyramiding-price').text(plan.pyramiding_price ? `${formatNumber(plan.pyramiding_price)} ฿` : "-");
+                $('#mi-trailing-stop-price').text(plan.trailing_stop_price ? `${formatNumber(plan.trailing_stop_price)} ฿` : "-");
+
+                function renderTrancheTable() {
+                    let totalBudget = parseFloat($('#modal-user-budget').val()) || 50000;
+                    let curPrice = parseFloat(stock.price) || 0;
+                    
+                    let tranches = [
+                        { name: "ไม้ที่ 1 (สะสม)", ratio: 0.30, price: parseFloat(plan.tranche_1_price) || curPrice, desc: "เริ่มสะสมเมื่อเข้าใกล้ Fair Value" },
+                        { name: "ไม้ที่ 2 (ถัวเฉลี่ย)", ratio: 0.30, price: parseFloat(plan.tranche_2_price) || (curPrice * 0.85), desc: "ซื้อเพิ่มเมื่อย่อตัว (MOS >= 15%)" },
+                        { name: "ไม้ที่ 3 (Panic Sale)", ratio: 0.40, price: parseFloat(plan.tranche_3_price) || (curPrice * 0.70), desc: "จัดเต็มยามวิกฤต/ตลาด Panic" }
+                    ];
+
+                    let html = "";
+                    let isRedFlag = stock.kawee_status === "red_flag";
+
+                    tranches.forEach((t) => {
+                        let trancheBudget = totalBudget * t.ratio;
+                        let shares = t.price > 0 ? Math.floor(trancheBudget / t.price / 100) * 100 : 0;
+                        
+                        let statusBadge = "";
+                        if (isRedFlag) {
+                            statusBadge = '<span class="badge bg-danger">🛑 ห้ามซื้อถัวเฉลี่ย</span>';
+                        } else if (curPrice > 0 && curPrice <= t.price) {
+                            statusBadge = '<span class="badge bg-success">🟢 พร้อมซื้อสะสม</span>';
+                        } else {
+                            statusBadge = '<span class="badge bg-secondary">🟡 ตั้งรับรอราคาย่อ</span>';
+                        }
+
+                        html += `
+                            <tr>
+                                <td class="fw-bold">${t.name}</td>
+                                <td>${(t.ratio * 100)}%</td>
+                                <td class="fw-bold text-primary">${formatNumber(t.price)} ฿</td>
+                                <td>${formatNumber(trancheBudget, 0)} ฿</td>
+                                <td class="fw-bold text-dark">${shares > 0 ? shares.toLocaleString() : "-"} หุ้น</td>
+                                <td>${statusBadge}</td>
+                            </tr>
+                        `;
+                    });
+
+                    $('#tranche-plan-tbody').html(html);
+                }
+
+                renderTrancheTable();
+                $('#modal-user-budget').off('input').on('input', renderTrancheTable);
+
                 // Populate Financial Ratios (Dynamic List)
                 let ratios = [
                     { label: "P/E (ปัจจุบัน)", value: stock.pe_trailing, is_percent: false },
@@ -1360,6 +1486,28 @@
             }
 
             function resetOtherButtons(activeFilter) {
+                if (activeFilter !== 'kaweeDca') {
+                     if ($('#filterKaweeDcaBtn').hasClass('btn-secondary')) {
+                         $('#filterKaweeDcaBtn').html('<i class="bi bi-award-fill"></i> 🟢 หุ้นผู้ชนะน่าออม (VI/DCA)');
+                         $('#filterKaweeDcaBtn').removeClass('btn-secondary');
+                         $('#filterKaweeDcaBtn').css('background-color', '#198754').css('color', '#fff');
+                         $('#filterKaweeDcaBtn').off('click').click(filterKaweeDcaStocks);
+                     }
+                }
+                if (activeFilter !== 'kaweeWatchlist') {
+                     if ($('#filterKaweeWatchlistBtn').hasClass('btn-secondary')) {
+                         $('#filterKaweeWatchlistBtn').html('<i class="bi bi-clock-history"></i> 🟡 รอราคาปรับฐาน (Watchlist)');
+                         $('#filterKaweeWatchlistBtn').removeClass('btn-secondary').addClass('btn-warning').addClass('text-dark');
+                         $('#filterKaweeWatchlistBtn').off('click').click(filterKaweeWatchlistStocks);
+                     }
+                }
+                if (activeFilter !== 'kaweeRedFlag') {
+                     if ($('#filterKaweeRedFlagBtn').hasClass('btn-secondary')) {
+                         $('#filterKaweeRedFlagBtn').html('<i class="bi bi-exclamation-triangle-fill"></i> 🔴 กลุ่มเตือนความเสี่ยง (Red Flag)');
+                         $('#filterKaweeRedFlagBtn').removeClass('btn-secondary').addClass('btn-danger');
+                         $('#filterKaweeRedFlagBtn').off('click').click(filterKaweeRedFlagStocks);
+                     }
+                }
                 if (activeFilter !== 'growth') {
                      if ($('#filterGrowthBtn').hasClass('btn-secondary')) {
                          $('#filterGrowthBtn').html('<i class="bi bi-graph-up"></i> คัดกรองหุ้นเติบโต');
@@ -1685,6 +1833,11 @@
                 table.clear();
                 dcaStocks.forEach((stock, index) => addStockRow(stock, index));
                 table.draw();
+
+                $('#filterKaweeDcaBtn').html('<i class="bi bi-list-ul"></i> แสดงทั้งหมด');
+                $('#filterKaweeDcaBtn').removeClass('btn-success').addClass('btn-secondary').css('background-color', '').css('color', '');
+                $('#filterKaweeDcaBtn').off('click').click(resetFilter);
+
                 resetOtherButtons('kaweeDca');
             }
 
@@ -1698,6 +1851,11 @@
                 table.clear();
                 watchlistStocks.forEach((stock, index) => addStockRow(stock, index));
                 table.draw();
+
+                $('#filterKaweeWatchlistBtn').html('<i class="bi bi-list-ul"></i> แสดงทั้งหมด');
+                $('#filterKaweeWatchlistBtn').removeClass('btn-warning').removeClass('text-dark').addClass('btn-secondary');
+                $('#filterKaweeWatchlistBtn').off('click').click(resetFilter);
+
                 resetOtherButtons('kaweeWatchlist');
             }
 
@@ -1711,6 +1869,11 @@
                 table.clear();
                 redFlagStocks.forEach((stock, index) => addStockRow(stock, index));
                 table.draw();
+
+                $('#filterKaweeRedFlagBtn').html('<i class="bi bi-list-ul"></i> แสดงทั้งหมด');
+                $('#filterKaweeRedFlagBtn').removeClass('btn-danger').addClass('btn-secondary');
+                $('#filterKaweeRedFlagBtn').off('click').click(resetFilter);
+
                 resetOtherButtons('kaweeRedFlag');
             }
 

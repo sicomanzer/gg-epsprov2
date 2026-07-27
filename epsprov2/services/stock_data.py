@@ -862,6 +862,53 @@ def get_stock_data(ticker, include_description=False):
 
         kawee_take = " | ".join(kawee_take_parts)
 
+        # --- KAWEE BEGINNER ACTION & TRANCHE PLANNER ---
+        cur_p = get_val("currentPrice", 0)
+        fair_p = fair_value if (fair_value != "-" and fair_value > 0) else cur_p
+
+        tranche_1_price = round(fair_p * 0.90, 2) if fair_p > 0 else "-"
+        tranche_2_price = round(fair_p * 0.75, 2) if fair_p > 0 else "-"
+        tranche_3_price = round(fair_p * 0.60, 2) if fair_p > 0 else "-"
+
+        h52 = get_val("fiftyTwoWeekHigh", 0)
+        breakout_price = round(h52 * 0.98, 2) if h52 > 0 else "-"
+        pyramiding_price = round(h52 * 1.03, 2) if h52 > 0 else "-"
+        trailing_stop_price = round(h52 * 0.88, 2) if h52 > 0 else "-"
+
+        if red_flags:
+            action_signal = "🛑 ห้ามซื้อถัวเฉลี่ย (Red Flag Warning)"
+            action_signal_color = "danger"
+        elif mos != "-" and float(mos) >= 30:
+            action_signal = "🟢 ช้อนซื้อไม้ 3 (โอกาสทองยาม Panic)"
+            action_signal_color = "success"
+        elif mos != "-" and float(mos) >= 15:
+            action_signal = "🟢 ซื้อเพิ่มไม้ 2 (ของดีราคาถูกลง)"
+            action_signal_color = "success"
+        elif mos != "-" and float(mos) >= 0:
+            action_signal = "🟢 ซื้อไม้ 1 (เริ่มทยอยสะสม)"
+            action_signal_color = "success"
+        elif is_mega_trend and h52 > 0 and cur_p >= h52 * 0.95:
+            action_signal = "🔵 ซื้อตามเทรนด์ MI (Breakout Buy)"
+            action_signal_color = "info"
+        elif mos != "-" and float(mos) < -35:
+            action_signal = "🟠 แบ่งขายทำกำไร (Take Profit / Rebalance)"
+            action_signal_color = "warning"
+        else:
+            action_signal = "🟡 ถือต่อรอดูแนวโน้ม (Hold / Watchlist)"
+            action_signal_color = "secondary"
+
+        action_plan = {
+            "action_signal": action_signal,
+            "action_signal_color": action_signal_color,
+            "tranche_1_price": tranche_1_price,
+            "tranche_2_price": tranche_2_price,
+            "tranche_3_price": tranche_3_price,
+            "breakout_price": breakout_price,
+            "pyramiding_price": pyramiding_price,
+            "trailing_stop_price": trailing_stop_price,
+            "tranche_ratio": "30% / 30% / 40%"
+        }
+
         return {
             "symbol": ticker,
             "name": get_val("longName", ticker),
@@ -911,6 +958,7 @@ def get_stock_data(ticker, include_description=False):
             "checklists": checklists,
             "kawee_take": kawee_take,
             "mega_trend": mega_trend_category,
+            "action_plan": action_plan,
             "error": None,
             "details": {
                 "roa": get_float("returnOnAssets", 100),
